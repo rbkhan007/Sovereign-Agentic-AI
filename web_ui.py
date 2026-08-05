@@ -21,6 +21,28 @@ _CACHE = {"mtime": None, "size": None, "html": None, "etag": None}
 _STATIC_MOUNTED = False
 _NEXT_MOUNTED = False
 
+
+class SafeStaticFiles(StaticFiles):
+    """StaticFiles that hardens uploaded/served files against stored XSS.
+
+    Uploaded .html/.svg/.xml/.js are served from the app origin, so an inline
+    document could read window.API_TOKEN. We force those to download and always
+    send X-Content-Type-Options: nosniff.
+    """
+
+    _FORCE_DOWNLOAD_EXT = {".html", ".htm", ".svg", ".xhtml", ".xml", ".js", ".mjs"}
+
+    def file_response(self, full_path, stat_result, scope, status_code: int = 200):
+        resp = super().file_response(full_path, stat_result, scope, status_code)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        ext = os.path.splitext(str(full_path))[1].lower()
+        if ext in self._FORCE_DOWNLOAD_EXT:
+            fname = os.path.basename(str(full_path))
+            resp.headers.setdefault(
+                "Content-Disposition", f'attachment; filename="{fname}"'
+            )
+        return resp
+
 FALLBACK_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -308,7 +330,7 @@ def create_web_app(api_app: FastAPI) -> FastAPI:
     generated_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated")
     os.makedirs(generated_dir, exist_ok=True)
     if not any(getattr(r, "path", None) == "/generated" for r in api_app.routes):
-        api_app.mount("/generated", StaticFiles(directory=generated_dir), name="generated")
+        api_app.mount("/generated", SafeStaticFiles(directory=generated_dir), name="generated")
 
     _mount_nextjs(api_app)
 
