@@ -89,8 +89,15 @@ export interface ModelItem {
 }
 
 export interface ChatMessage {
+  id?: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+}
+
+/** Return the message with a stable id attached (memoized-safe, no-op if present). */
+export function ensureMsgId<T extends ChatMessage>(msg: T): T {
+  if (msg.id) return msg;
+  return { ...msg, id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `m-${Date.now()}-${Math.random().toString(36).slice(2)}` };
 }
 
 export interface StreamEvent {
@@ -101,6 +108,34 @@ export interface StreamEvent {
   args?: Record<string, unknown>;
   tokens?: number;
   elapsed?: number;
+}
+
+/** Yield parsed JSON payloads from an SSE body stream (handles multi-byte UTF-8 splits). */
+export async function* readSSE<T = Record<string, unknown>>(res: Response): AsyncGenerator<T> {
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No stream reader');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith('data:')) continue;
+      const payload = trimmed.slice(5).trim();
+      if (payload === '[DONE]') continue;
+      let evt: T;
+      try {
+        evt = JSON.parse(payload) as T;
+      } catch {
+        continue;
+      }
+      yield evt;
+    }
+  }
 }
 
 export async function autoStreamChat(
@@ -126,38 +161,15 @@ export async function autoStreamChat(
     throw new Error(`Stream failed: ${res.status}`);
   }
 
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error('No stream reader');
-
-  const decoder = new TextDecoder();
   let assistantText = '';
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data:')) continue;
-      const payload = trimmed.slice(5).trim();
-      if (payload === '[DONE]') continue;
-      let evt: StreamEvent;
-      try {
-        evt = JSON.parse(payload) as StreamEvent;
-      } catch {
-        continue;
-      }
-      if (evt.type === 'response' && typeof evt.content === 'string') {
-        assistantText += evt.content;
-      }
-      if (evt.type === 'error') {
-        throw new Error(evt.content || 'Stream error');
-      }
-      if (onEvent) onEvent(evt);
+  for await (const evt of readSSE<StreamEvent>(res)) {
+    if (evt.type === 'response' && typeof evt.content === 'string') {
+      assistantText += evt.content;
     }
+    if (evt.type === 'error') {
+      throw new Error(evt.content || 'Stream error');
+    }
+    if (onEvent) onEvent(evt);
   }
   return assistantText;
 }
@@ -193,34 +205,11 @@ export async function computerStream(
     throw new Error(`Computer stream failed: ${res.status}`);
   }
 
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error('No stream reader');
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data:')) continue;
-      const payload = trimmed.slice(5).trim();
-      if (payload === '[DONE]') continue;
-      let evt: ComputerToolEvent;
-      try {
-        evt = JSON.parse(payload) as ComputerToolEvent;
-      } catch {
-        continue;
-      }
-      if (evt.type === 'error') {
-        throw new Error(evt.content || 'Computer agent error');
-      }
-      if (onEvent) onEvent(evt);
+  for await (const evt of readSSE<ComputerToolEvent>(res)) {
+    if (evt.type === 'error') {
+      throw new Error(evt.content || 'Computer agent error');
     }
+    if (onEvent) onEvent(evt);
   }
 }
 

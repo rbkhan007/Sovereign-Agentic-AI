@@ -297,7 +297,7 @@ def _read_next_html(path: str, loopback: bool = True) -> tuple:
         return None, None
 
     with _CACHE_LOCK:
-        cache_key = (mtime, size, path, getattr(CONFIG, "api_token", "") or "")
+        cache_key = (mtime, size, path, loopback, getattr(CONFIG, "api_token", "") or "")
         if _CACHE.get("cache_key") == cache_key and _CACHE.get("html") is not None:
             return _CACHE["html"], _CACHE["etag"]
 

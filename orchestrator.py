@@ -96,6 +96,13 @@ STRATEGIST_PROMPT = (
 THINK_MAX_TOKENS = 256
 MAX_TOKENS_CAP = 8192
 
+# Long-conversation handling: older turns are summarized (best-effort) and the
+# retained window is capped so the prompt fits the executor context window.
+_SUMMARY_MIN_TURNS = 15
+_SUMMARY_KEEP_TURNS = 10
+_SUMMARY_MAX_TOKENS = 200
+_SUMMARY_MAX_CHARS = 1500
+
 
 @dataclass
 class PlanNode:
@@ -167,9 +174,70 @@ class Orchestrator:
         logger.info(f"[Parallel] judged {len(candidates)} candidates, best={best} score={scores[best]:.1f}")
         return candidates[best], best
 
+    def _context_budget(self, exec_model: str, max_tokens: Optional[int]) -> int:
+        """Char budget for the conversation-history block so the full prompt
+        (history + memories + plan + response) fits the executor's n_ctx.
+
+        Rough rule of thumb: ~4 chars per token. Reserve room for the fixed
+        overhead blocks and the generated response, keeping at least 1024 chars
+        of history so short-context models still carry a usable window.
+        """
+        mc = self.models.configs.get(exec_model)
+        n_ctx = getattr(mc, "n_ctx", None) or 4096
+        gen_tokens = min(max_tokens or 2048, MAX_TOKENS_CAP)
+        gen_chars = gen_tokens * 4
+        fixed_chars = 800  # system prompt + plan + memories + web context margin
+        budget = n_ctx * 4 - gen_chars - fixed_chars
+        return max(budget, 1024)
+
+    def _maybe_summarize(self, conv, user_message: str) -> str:
+        """Best-effort summary of older turns when the conversation is long.
+
+        Only runs when a strategist is loaded, planning is enabled and the
+        history exceeds a threshold; the summary is injected as a system block
+        and the retained window is capped so the prompt never overflows n_ctx.
+        Returns '' when summarization is not warranted or fails (the caller
+        then simply trims history to the char budget).
+        """
+        try:
+            with conv._lock:
+                total = len(conv.messages)
+            if total <= _SUMMARY_MIN_TURNS * 2:
+                return ""
+            if "hy-mt2" not in self.models.configs:
+                return ""
+            if "hy-mt2" not in self.models.instances:
+                return ""
+            with conv._lock:
+                head = conv.messages[:-_SUMMARY_KEEP_TURNS]
+                if not head:
+                    return ""
+                old = "\n".join(f"{m.role}: {m.content[:300]}" for m in head[-_SUMMARY_KEEP_TURNS * 2:])
+            prompt = (
+                "Summarize the earlier part of this conversation in a few sentences. "
+                "Keep key facts, decisions and unresolved questions. "
+                f"User's current question: {user_message[:200]}\n\nHistory:\n{old}"
+            )
+            summary = self.models.generate("hy-mt2", prompt, max_tokens=_SUMMARY_MAX_TOKENS, temperature=0.2)
+            return (summary or "").strip()[:_SUMMARY_MAX_CHARS]
+        except Exception as e:
+            logger.warning(f"History summarization skipped: {e}")
+            return ""
+
     def _build_exec_prompt(self, conv, thinking: str, web_context: str = "",
-                           memories: Optional[list] = None) -> str:
-        blocks = [conv.get_context(open_assistant=False)]
+                           memories: Optional[list] = None,
+                           exec_model: str = "hy-mt2",
+                           max_tokens: Optional[int] = None,
+                           summary: str = "") -> str:
+        budget = self._context_budget(exec_model, max_tokens)
+        if summary:
+            blocks = [conv.get_context(open_assistant=False, max_chars=budget,
+                                       max_msgs=_SUMMARY_KEEP_TURNS * 2)]
+            blocks.append(CHAT_TEMPLATE.format(
+                role="system",
+                content=f"Earlier conversation summary:\n{summary}"))
+        else:
+            blocks = [conv.get_context(open_assistant=False, max_chars=budget)]
         if memories:
             mem_text = "\n".join(f"- {m[:500]}" for m in memories if m)[:4000]
             if mem_text:
@@ -210,6 +278,8 @@ class Orchestrator:
             conv.set_system(system_override)
         elif conv.system_prompt is None:
             conv.set_system(SYSTEM_PROMPT)
+        with conv._lock:
+            user_idx = len(conv.messages)
         conv.add("user", user_message)
 
         model = model_override or self.executor
@@ -217,7 +287,7 @@ class Orchestrator:
             try:
                 return self._call_openai(conv, model, max_tokens=max_tokens)
             except Exception:
-                conv.messages.pop()
+                conv.rollback_to(user_idx)
                 raise
 
         exec_model = self._resolve_executor(model_override)
@@ -288,10 +358,16 @@ class Orchestrator:
 
         task, ranked = self.router.select_executors(user_message, CONFIG.parallel_max, model_override)
 
-        exec_prompt = self._build_exec_prompt(conv, thinking, web_context, memories)
+        summary = ""
+        if use_planning and not sandbox:
+            summary = self._maybe_summarize(conv, user_message)
+        exec_prompt = self._build_exec_prompt(conv, thinking, web_context, memories,
+                                              exec_model=exec_model,
+                                              max_tokens=max_tokens,
+                                              summary=summary)
 
         if exec_model not in self.models.configs:
-            conv.messages.pop()
+            conv.rollback_to(user_idx)
             raise RuntimeError("No model available")
 
         _metrics.record_request(task=task, model=exec_model, tokens_in=len(user_message.split()))
@@ -328,7 +404,7 @@ class Orchestrator:
                     return self._call_openai(conv, f"openai/{CONFIG.openai.chat_model}", max_tokens=max_tokens)
                 except Exception as oe:
                     logger.error(f"OpenAI fallback failed: {oe}")
-            conv.messages.pop()
+            conv.rollback_to(user_idx)
             raise RuntimeError(f"Generation failed: {e}") from e
         finally:
             if not CONFIG.auto_load:
@@ -376,6 +452,8 @@ class Orchestrator:
             conv.set_system(system_override)
         elif conv.system_prompt is None:
             conv.set_system(SYSTEM_PROMPT)
+        with conv._lock:
+            user_idx = len(conv.messages)
         conv.add("user", user_message)
 
         model = model_override or self.executor
@@ -388,7 +466,7 @@ class Orchestrator:
                        "tokens": len(result["response"].split()), "elapsed": 0.0}
                 return
             except Exception:
-                conv.messages.pop()
+                conv.rollback_to(user_idx)
                 yield {"type": "error", "content": "OpenAI call failed"}
                 return
 
@@ -454,7 +532,13 @@ class Orchestrator:
             yield {"type": "thinking", "content": thinking}
 
         task = classify_task(user_message)
-        exec_prompt = self._build_exec_prompt(conv, thinking, web_context, memories)
+        summary = ""
+        if use_planning and not sandbox:
+            summary = self._maybe_summarize(conv, user_message)
+        exec_prompt = self._build_exec_prompt(conv, thinking, web_context, memories,
+                                              exec_model=exec_model,
+                                              max_tokens=max_tokens,
+                                              summary=summary)
 
         parts = []
         if exec_model in self.models.configs:
@@ -484,7 +568,7 @@ class Orchestrator:
                         return
                     except Exception as oe:
                         logger.error(f"OpenAI fallback failed: {oe}")
-                conv.messages.pop()
+                conv.rollback_to(user_idx)
                 yield {"type": "error", "content": str(e)}
                 return
             finally:
@@ -495,7 +579,7 @@ class Orchestrator:
                         if "hy-mt2" in self.models.instances:
                             self.models.unload("hy-mt2")
         else:
-            conv.messages.pop()
+            conv.rollback_to(user_idx)
             yield {"type": "error", "content": "No model available"}
             return
 
@@ -678,7 +762,7 @@ class Orchestrator:
             _openai_call_slot()
             resp = client.chat.completions.create(
                 model=model,
-                messages=conv.to_openai_format(),
+                messages=conv.to_openai_format(max_msgs=_SUMMARY_KEEP_TURNS * 2),
                 max_tokens=min(max_tokens or 2048, MAX_TOKENS_CAP),
             )
             text = resp.choices[0].message.content.strip()

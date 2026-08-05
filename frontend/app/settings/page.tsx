@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { fetchJSON, toText } from '@/lib/api';
 import { useToast } from '@/components/providers/ToastProvider';
 import Input from '@/components/ui/Input';
@@ -41,15 +41,16 @@ export default function SettingsPage() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const { addToast } = useToast();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const data = await fetchJSON('/v1/config');
       setConfig(data as Record<string, unknown>);
       setApiKey('');
     } catch {
-      addToast('Failed to load config', 'error');
+      if (!silent) addToast('Failed to load config', 'error');
     } finally {
       setLoading(false);
     }
@@ -76,13 +77,24 @@ export default function SettingsPage() {
         body: JSON.stringify({ key: backendKey, value }),
       });
       addToast('Config updated', 'success');
-      load();
+      load(true);
     } catch (e) {
       addToast(toText(e), 'error');
     } finally {
       setSaving(false);
     }
   }, [addToast]);
+
+  /* Debounce rapid keystrokes so typing a URL doesn't POST + skeleton-flash
+   * per character. The last pending update within 500ms wins. */
+  const updateDebounced = useCallback((key: string, value: unknown) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => { update(key, value); }, 500);
+  }, [update]);
+
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+  }, []);
 
   const cloud = config.cloud as CloudConfig | undefined;
   const openai = config.openai as OpenAIConfig | undefined;
@@ -238,14 +250,14 @@ export default function SettingsPage() {
               <Field label="Base URL">
                 <Input
                   value={cloud?.base_url || ''}
-                  onChange={e => update('openai.base_url', e.target.value)}
+                  onChange={e => updateDebounced('openai.base_url', e.target.value)}
                   placeholder="https://api.openai.com/v1"
                 />
               </Field>
               <Field label="Model">
                 <Input
                   value={cloud?.chat_model || ''}
-                  onChange={e => update('openai.chat_model', e.target.value)}
+                  onChange={e => updateDebounced('openai.chat_model', e.target.value)}
                   placeholder="gpt-4o-mini"
                 />
               </Field>
@@ -271,7 +283,7 @@ export default function SettingsPage() {
                   min="1"
                   max="120"
                   value={String(openai?.rate_limit_per_min ?? 10)}
-                  onChange={e => update('openai.rate_limit_per_min', parseInt(e.target.value) || 10)}
+                  onChange={e => updateDebounced('openai.rate_limit_per_min', parseInt(e.target.value) || 10)}
                 />
               </Field>
               <Field label="Backoff Max (seconds)">
@@ -280,7 +292,7 @@ export default function SettingsPage() {
                   min="1"
                   max="300"
                   value={String(openai?.backoff_max_s ?? 60)}
-                  onChange={e => update('openai.backoff_max_s', parseFloat(e.target.value) || 60)}
+                  onChange={e => updateDebounced('openai.backoff_max_s', parseFloat(e.target.value) || 60)}
                 />
               </Field>
               <div className="md:col-span-2">
@@ -324,10 +336,10 @@ export default function SettingsPage() {
             />
           </Field>
           <Field label="Rate Limit (light/min)">
-            <Input type="number" min="1" value={String((config.rate_limit as Record<string, unknown> | undefined)?.light_per_min ?? 120)} onChange={e => update('rate_limit.light_per_min', parseInt(e.target.value))} />
+            <Input type="number" min="1" value={String((config.rate_limit as Record<string, unknown> | undefined)?.light_per_min ?? 120)} onChange={e => updateDebounced('rate_limit.light_per_min', parseInt(e.target.value))} />
           </Field>
           <Field label="Rate Limit (heavy/min)">
-            <Input type="number" min="1" value={String((config.rate_limit as Record<string, unknown> | undefined)?.heavy_per_min ?? 10)} onChange={e => update('rate_limit.heavy_per_min', parseInt(e.target.value))} />
+            <Input type="number" min="1" value={String((config.rate_limit as Record<string, unknown> | undefined)?.heavy_per_min ?? 10)} onChange={e => updateDebounced('rate_limit.heavy_per_min', parseInt(e.target.value))} />
           </Field>
         </div>
         <div className="mt-4 space-y-3">
@@ -367,7 +379,7 @@ export default function SettingsPage() {
                       min="0"
                       max="2"
                       value={String(params.temperature ?? 0.7)}
-                      onChange={e => update(`models.${name}.temperature`, parseFloat(e.target.value))}
+                      onChange={e => updateDebounced(`models.${name}.temperature`, parseFloat(e.target.value))}
                     />
                   </Field>
                   <Field label={t('settings.maxTokens')}>
@@ -375,7 +387,7 @@ export default function SettingsPage() {
                       type="number"
                       min="16"
                       value={String(params.max_tokens ?? 512)}
-                      onChange={e => update(`models.${name}.max_tokens`, parseInt(e.target.value))}
+                      onChange={e => updateDebounced(`models.${name}.max_tokens`, parseInt(e.target.value))}
                     />
                   </Field>
                   <Field label={t('settings.context')}>
@@ -383,7 +395,7 @@ export default function SettingsPage() {
                       type="number"
                       min="256"
                       value={String(params.n_ctx ?? 2048)}
-                      onChange={e => update(`models.${name}.n_ctx`, parseInt(e.target.value))}
+                      onChange={e => updateDebounced(`models.${name}.n_ctx`, parseInt(e.target.value))}
                     />
                   </Field>
                   <Field label={t('settings.topP')}>
@@ -393,7 +405,7 @@ export default function SettingsPage() {
                       min="0"
                       max="1"
                       value={String(params.top_p ?? 0.9)}
-                      onChange={e => update(`models.${name}.top_p`, parseFloat(e.target.value))}
+                      onChange={e => updateDebounced(`models.${name}.top_p`, parseFloat(e.target.value))}
                     />
                   </Field>
                 </div>
@@ -407,22 +419,22 @@ export default function SettingsPage() {
       <Section title={t('settings.performance')} icon={<Gauge size={20} />} description="Harness, parallel, VRAM, prune, and cloud settings">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <Field label={t('settings.threads')}>
-            <Input type="number" min="1" value={String(config.threads ?? 4)} onChange={e => update('threads', parseInt(e.target.value))} />
+            <Input type="number" min="1" value={String(config.threads ?? 4)} onChange={e => updateDebounced('threads', parseInt(e.target.value))} />
           </Field>
           <Field label={t('settings.vramBudget')}>
-            <Input type="number" min="256" value={String((config.vram as Record<string, unknown> | undefined)?.budget_mb ?? 4096)} onChange={e => update('vram_budget_mb', parseInt(e.target.value))} />
+            <Input type="number" min="256" value={String((config.vram as Record<string, unknown> | undefined)?.budget_mb ?? 4096)} onChange={e => updateDebounced('vram_budget_mb', parseInt(e.target.value))} />
           </Field>
           <Field label={t('settings.parallelMax')}>
-            <Input type="number" min="1" value={String((config.parallel as Record<string, unknown> | undefined)?.max ?? 2)} onChange={e => update('parallel_max', parseInt(e.target.value))} />
+            <Input type="number" min="1" value={String((config.parallel as Record<string, unknown> | undefined)?.max ?? 2)} onChange={e => updateDebounced('parallel_max', parseInt(e.target.value))} />
           </Field>
           <Field label={t('settings.pruneInterval')}>
-            <Input type="number" min="1" value={String((config.prune as Record<string, unknown> | undefined)?.interval_hours ?? 6)} onChange={e => update('prune_interval_hours', parseInt(e.target.value))} />
+            <Input type="number" min="1" value={String((config.prune as Record<string, unknown> | undefined)?.interval_hours ?? 6)} onChange={e => updateDebounced('prune_interval_hours', parseInt(e.target.value))} />
           </Field>
           <Field label={t('settings.pruneMaxAge')}>
-            <Input type="number" min="1" value={String((config.prune as Record<string, unknown> | undefined)?.max_age_days ?? 30)} onChange={e => update('prune_max_age_days', parseInt(e.target.value))} />
+            <Input type="number" min="1" value={String((config.prune as Record<string, unknown> | undefined)?.max_age_days ?? 30)} onChange={e => updateDebounced('prune_max_age_days', parseInt(e.target.value))} />
           </Field>
           <Field label={t('settings.genTimeout')}>
-            <Input type="number" min="5" value={String((config.gen as Record<string, unknown> | undefined)?.timeout_s ?? 240)} onChange={e => update('gen_timeout_s', parseFloat(e.target.value))} />
+            <Input type="number" min="5" value={String((config.gen as Record<string, unknown> | undefined)?.timeout_s ?? 240)} onChange={e => updateDebounced('gen_timeout_s', parseFloat(e.target.value))} />
           </Field>
         </div>
 

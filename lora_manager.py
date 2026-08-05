@@ -197,7 +197,12 @@ def train_lora(
     output_name = _safe_lora_name(output_name)
     dset_dir = os.path.abspath(os.path.join(BASE_DIR, "lora_datasets"))
     resolved_dataset = os.path.abspath(dataset_path)
-    if os.path.commonpath([dset_dir, resolved_dataset]) != dset_dir:
+    try:
+        inside = os.path.commonpath([dset_dir, resolved_dataset]) == dset_dir
+    except ValueError:
+        # Different drives (e.g. D:\ vs C:\ on Windows) make commonpath raise.
+        inside = False
+    if not inside:
         logger.error(f"Dataset must live under lora_datasets/: {dataset_path}")
         return None
 

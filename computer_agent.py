@@ -29,7 +29,7 @@ _DANGEROUS_CMDS = {
 
 _DANGEROUS_TOKENS = {
     "shutdown", "reboot", "halt", "mkfs", "diskpart", "format",
-    "dd", "del", "erase", "rd", "rmdir", "deltree",
+    "dd", "del", "erase", "rd", "rmdir", "deltree", "rm", "remove", "unlink",
 }
 
 _MAX_TOOL_OUTPUT = 8000

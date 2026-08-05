@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { fetchJSON, toArray, toText, type ModelItem, type SystemInfo, type Metrics, type HardwareInfo } from '@/lib/api';
 import { useToast } from '@/components/providers/ToastProvider';
 import { useChartTheme, chartTooltipStyle } from '@/lib/chartTheme';
@@ -24,6 +24,7 @@ export default function Dashboard() {
   const [hardware, setHardware] = useState<HardwareInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [polling, setPolling] = useState(true);
+  const pollingRef = useRef(false);
   const [loadingModel, setLoadingModel] = useState(false);
   const [backendOnline, setBackendOnline] = useState(false);
   const { addToast } = useToast();
@@ -60,6 +61,8 @@ export default function Dashboard() {
   useEffect(() => {
     if (!polling) return;
     const id = setInterval(async () => {
+      if (pollingRef.current) return;
+      pollingRef.current = true;
       try {
         const [met, h] = await Promise.all([
           fetchJSON('/v1/metrics'),
@@ -86,7 +89,9 @@ export default function Dashboard() {
           }];
           return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
         });
-      } catch { /* ignore poll errors */ }
+      } catch { /* ignore poll errors */ } finally {
+        pollingRef.current = false;
+      }
     }, 2000);
     return () => clearInterval(id);
   }, [polling]);

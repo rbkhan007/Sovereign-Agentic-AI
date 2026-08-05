@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { fetchJSON, toArray, toText, api, autoStreamChat, uploadChatFile, computerStream, type ModelItem, type ChatMessage, type Agent, type Skill, type Workspace, type StreamEvent, type ComputerToolEvent } from '@/lib/api';
+import { fetchJSON, toArray, toText, api, autoStreamChat, uploadChatFile, computerStream, ensureMsgId, type ModelItem, type ChatMessage, type Agent, type Skill, type Workspace, type StreamEvent, type ComputerToolEvent } from '@/lib/api';
 import { getStorage, setStorageValue, removeStorageValue } from '@/lib/storage';
 import { useToast } from '@/components/providers/ToastProvider';
 import { useTheme } from '@/components/ThemeProvider';
@@ -144,7 +144,7 @@ export default function ChatPage() {
   const [convId, setConvId] = useState('');
   const [modelLoading, setModelLoading] = useState(false);
   const [currentConvTitle, setCurrentConvTitle] = useState('');
-  const [abortController, setAbortController] = useState<AbortController | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [exportTarget, setExportTarget] = useState<{ title: string; messages: ChatMessage[]; convId?: string } | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
@@ -164,15 +164,16 @@ export default function ChatPage() {
 
   // Workspace files for @ mentions
   const [workspaceFiles, setWorkspaceFiles] = useState<{ name: string }[]>([]);
+  const filesFetchedForWs = useRef<string | null>(null);
 
   // Image preview
   const [previewImage, setPreviewImage] = useState<{ url: string; name: string } | null>(null);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
 
   // Message toolbar state
-  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
-  const [feedback, setFeedback] = useState<Record<number, 'up' | 'down'>>({});
+  const [feedback, setFeedback] = useState<Record<string, 'up' | 'down'>>({});
 
   // Scroll-to-bottom
   const [atBottom, setAtBottom] = useState(true);
@@ -334,13 +335,13 @@ export default function ChatPage() {
   const prevMsgLen = useRef(0);
   useEffect(() => {
     if (atBottom) {
-      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      chatEndRef.current?.scrollIntoView({ behavior: (sending || streaming || autoStreaming || agenticActive) ? 'auto' : 'smooth' });
       setNewMessageCount(0);
     } else if (messages.length > prevMsgLen.current) {
       setNewMessageCount((c) => c + (messages.length - prevMsgLen.current));
     }
     prevMsgLen.current = messages.length;
-  }, [messages, thinking, atBottom]);
+  }, [messages, thinking, atBottom, sending, streaming, autoStreaming, agenticActive]);
 
   useEffect(() => {
     if (inputRef.current) {
@@ -369,6 +370,8 @@ export default function ChatPage() {
       if (recognitionRef.current) {
         try { recognitionRef.current.stop(); } catch { /* ignore */ }
       }
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
     };
   }, []);
 
@@ -454,7 +457,7 @@ export default function ChatPage() {
     }
 
     const controller = new AbortController();
-    setAbortController(controller);
+    abortControllerRef.current = controller;
     setSending(true);
     setThinking(true);
 
@@ -471,7 +474,7 @@ export default function ChatPage() {
 
     try {
       if (autoStreaming) {
-        setMessages([...history, { role: 'assistant', content: '' }]);
+        setMessages([...history.map(ensureMsgId), ensureMsgId({ role: 'assistant', content: '' })]);
         let assistantText = '';
         await autoStreamChat(
           history.map((m) => ({ role: m.role, content: m.content })),
@@ -486,7 +489,8 @@ export default function ChatPage() {
               assistantText += evt.content;
               setMessages(prev => {
                 const next = [...prev];
-                next[next.length - 1] = { role: 'assistant', content: assistantText };
+                const last = next[next.length - 1];
+                next[next.length - 1] = { ...last, role: 'assistant', content: assistantText };
                 return next;
               });
             }
@@ -506,7 +510,7 @@ export default function ChatPage() {
         const decoder = new TextDecoder();
         let assistantText = '';
         let buffer = '';
-        setMessages([...history, { role: 'assistant', content: '' }]);
+        setMessages([...history.map(ensureMsgId), ensureMsgId({ role: 'assistant', content: '' })]);
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -524,7 +528,8 @@ export default function ChatPage() {
                 assistantText += evt.content;
                 setMessages(prev => {
                   const next = [...prev];
-                  next[next.length - 1] = { role: 'assistant', content: assistantText };
+                  const last = next[next.length - 1];
+                  next[next.length - 1] = { ...last, role: 'assistant', content: assistantText };
                   return next;
                 });
               } else if (evt.type === 'thinking' && typeof evt.content === 'string') {
@@ -535,7 +540,7 @@ export default function ChatPage() {
             } catch { /* ignore malformed frames */ }
           }
         }
-        const finalMessages: ChatMessage[] = [...history, { role: 'assistant', content: assistantText }];
+        const finalMessages: ChatMessage[] = [...history.map(ensureMsgId), ensureMsgId({ role: 'assistant', content: assistantText })];
         persistMessages(finalMessages);
       } else {
         const data = await fetchJSON('/v1/chat/completions', {
@@ -545,8 +550,8 @@ export default function ChatPage() {
         });
         const choice = (data as { choices?: { message?: ChatMessage }[] }).choices?.[0]?.message;
         if (choice) {
-          const assistantMsg: ChatMessage = { role: choice.role, content: toText(choice.content) };
-          const finalMessages = [...history, assistantMsg];
+          const assistantMsg: ChatMessage = ensureMsgId({ role: choice.role, content: toText(choice.content) });
+          const finalMessages = [...history.map(ensureMsgId), assistantMsg];
           persistMessages(finalMessages);
         }
       }
@@ -575,7 +580,7 @@ export default function ChatPage() {
       setSending(false);
       setThinking(false);
       setThinkingText('');
-      setAbortController(null);
+      abortControllerRef.current = null;
       setContextChips([]);
     }
   }, [sending, modelLoading, thinking, uploading, selectedModel, models, selectedAgent, selectedSkill, selectedWorkspace, planning, streaming, autoStreaming, convId, persistMessages, persistConvId, loadConversations, addToast]);
@@ -594,7 +599,7 @@ export default function ChatPage() {
     }
 
     const controller = new AbortController();
-    setAbortController(controller);
+    abortControllerRef.current = controller;
     setSending(true);
     setThinking(true);
     setAgenticActive(true);
@@ -629,15 +634,16 @@ export default function ChatPage() {
             setThinkingText('');
             setMessages((prev) => {
               const next = [...prev];
-              next[next.length - 1] = { role: 'assistant', content: assistantText };
+              const last = next[next.length - 1];
+              next[next.length - 1] = { ...last, role: 'assistant', content: assistantText };
               return next;
             });
           }
         },
         controller.signal,
       );
-      const finalMessages: ChatMessage[] = [...history, { role: 'assistant', content: assistantText }];
-      persistMessages(finalMessages);
+        const finalMessages: ChatMessage[] = [...history.map(ensureMsgId), ensureMsgId({ role: 'assistant', content: assistantText })];
+        persistMessages(finalMessages);
       addToast('Agent run complete', 'success');
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
@@ -648,7 +654,7 @@ export default function ChatPage() {
       setThinking(false);
       setThinkingText('');
       setAgenticActive(false);
-      setAbortController(null);
+      abortControllerRef.current = null;
       setContextChips([]);
     }
   }, [sending, modelLoading, thinking, uploading, selectedModel, models, persistMessages, addToast]);
@@ -688,7 +694,7 @@ export default function ChatPage() {
       content = `Referenced context: ${refs}\n\n${content}`;
     }
 
-    const userMsg: ChatMessage = { role: 'user', content };
+    const userMsg: ChatMessage = ensureMsgId({ role: 'user', content });
     const nextMessages = [...messages, userMsg];
     persistMessages(nextMessages);
     setInput('');
@@ -702,9 +708,9 @@ export default function ChatPage() {
   }
 
   function abortGeneration() {
-    if (abortController) {
-      abortController.abort();
-      setAbortController(null);
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
       setSending(false);
       setThinking(false);
       setThinkingText('');
@@ -713,18 +719,23 @@ export default function ChatPage() {
     }
   }
 
+  const historyReqSeq = useRef(0);
   async function loadHistory(id: string) {
+    const seq = ++historyReqSeq.current;
     try {
       const qs = `?conv_id=${encodeURIComponent(id)}&workspace_id=${encodeURIComponent(selectedWorkspace || 'default')}`;
       const data = await fetchJSON(`/v1/chat/history${qs}`);
-      const history = toArray<ChatMessage>(data);
+      if (seq !== historyReqSeq.current) return; // a newer selection won the race
+      const history = toArray<ChatMessage>(data).map(ensureMsgId);
       persistMessages(history);
       persistConvId(id);
       const conv = conversations.find((c) => c.id === id);
       if (conv?.title) setCurrentConvTitle(conv.title);
       addToast(t('chat.historyLoaded'), 'success');
     } catch {
-      addToast(t('chat.failedToLoadHistory'), 'error');
+      if (seq === historyReqSeq.current) {
+        addToast(t('chat.failedToLoadHistory'), 'error');
+      }
     }
   }
 
@@ -740,6 +751,8 @@ export default function ChatPage() {
 
   async function fetchWorkspaceFiles() {
     if (!selectedWorkspace) return;
+    if (filesFetchedForWs.current === selectedWorkspace) return;
+    filesFetchedForWs.current = selectedWorkspace;
     try {
       const data = await fetchJSON(`/v1/workspaces/${encodeURIComponent(selectedWorkspace)}/files`);
       const list = toArray<{ name: string }>(data);
@@ -982,16 +995,23 @@ export default function ChatPage() {
   }
 
   function startEdit(index: number) {
-    setEditingIndex(index);
-    setEditText(messages[index].content);
+    const msg = messages[index];
+    if (!msg) return;
+    setEditingId(msg.id ?? null);
+    setEditText(msg.content);
   }
 
   function saveEdit() {
-    if (editingIndex === null) return;
-    const next = messages.slice(0, editingIndex + 1);
-    next[editingIndex] = { ...messages[editingIndex], content: editText };
+    if (editingId === null) return;
+    const idx = messages.findIndex((m) => m.id === editingId);
+    if (idx === -1) {
+      setEditingId(null);
+      return;
+    }
+    const next = messages.slice(0, idx + 1);
+    next[idx] = { ...messages[idx], content: editText };
     persistMessages(next);
-    setEditingIndex(null);
+    setEditingId(null);
     setEditText('');
   }
 
@@ -1021,8 +1041,8 @@ export default function ChatPage() {
     window.speechSynthesis.speak(u);
   }
 
-  function setFeedbackFor(index: number, kind: 'up' | 'down') {
-    setFeedback((prev) => ({ ...prev, [index]: kind }));
+  function setFeedbackFor(id: string, kind: 'up' | 'down') {
+    setFeedback((prev) => ({ ...prev, [id]: kind }));
   }
 
   function onEmptyCardSelect(card: { prompt: string; modelId?: string; agentName?: string }) {
@@ -1085,7 +1105,7 @@ export default function ChatPage() {
               >
                 <History size={18} />
               </button>
-              {sending && abortController && (
+              {sending && abortControllerRef.current && (
                 <Button variant="danger" size="sm" onClick={abortGeneration} className="!py-1.5 !px-2.5 gap-1">
                   <Square size={12} /> Stop
                 </Button>
@@ -1216,7 +1236,7 @@ export default function ChatPage() {
 
           {messages.map((msg, i) => (
             <div
-              key={i}
+              key={msg.id ?? i}
               className={`group flex gap-3 animate-fade-in ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
               {msg.role === 'assistant' && (
@@ -1236,18 +1256,18 @@ export default function ChatPage() {
                   <MessageToolbar
                     role={msg.role === 'system' ? 'assistant' : msg.role}
                     content={msg.content}
-                    feedback={feedback[i] || null}
+                    feedback={msg.id ? feedback[msg.id] || null : null}
                     onEdit={msg.role === 'user' ? () => startEdit(i) : undefined}
                     onDelete={() => deleteMessage(i)}
                     onBranch={msg.role === 'user' ? branchConversation : undefined}
                     onRegenerate={msg.role === 'assistant' ? () => regenerateFrom(i) : undefined}
                     onReadAloud={msg.role === 'assistant' ? () => readAloud(msg.content) : undefined}
-                    onFeedback={msg.role === 'assistant' ? (k) => setFeedbackFor(i, k) : undefined}
+                    onFeedback={msg.role === 'assistant' ? (k) => setFeedbackFor(msg.id ?? String(i), k) : undefined}
                     onCopyRaw={() => { navigator.clipboard.writeText(msg.content); addToast('Copied raw markdown', 'success'); }}
                     onCopyClean={() => { navigator.clipboard.writeText(stripMarkdown(msg.content)); addToast('Copied clean text', 'success'); }}
                   />
                 </div>
-                {editingIndex === i ? (
+                {editingId === (msg.id ?? String(i)) ? (
                   <div className="flex flex-col gap-2">
                     <textarea
                       value={editText}
@@ -1257,7 +1277,7 @@ export default function ChatPage() {
                       autoFocus
                     />
                     <div className="flex gap-2 justify-end">
-                      <Button size="sm" variant="secondary" onClick={() => setEditingIndex(null)}>Cancel</Button>
+                      <Button size="sm" variant="secondary" onClick={() => setEditingId(null)}>Cancel</Button>
                       <Button size="sm" onClick={saveEdit}>Save & resend</Button>
                     </div>
                   </div>

@@ -47,25 +47,44 @@ class Conversation:
             except Exception:
                 pass
 
-    def get_context(self, include_system: bool = True, open_assistant: bool = True) -> str:
+    def get_context(self, include_system: bool = True, open_assistant: bool = True,
+                    max_chars: Optional[int] = None,
+                    max_msgs: Optional[int] = None) -> str:
+        """Render the chat context as a prompt block.
+
+        When ``max_chars`` is given, oldest messages are dropped until the
+        rendered block fits, so multi-turn conversations cannot overflow the
+        model context window. ``max_msgs`` additionally caps the number of
+        retained messages (used after older turns have been summarized).
+        """
         with self._lock:
-            parts = []
             role_map = {"user": "user", "assistant": "assistant"}
+            msgs = [CHAT_TEMPLATE.format(role=role_map.get(m.role, m.role), content=m.content)
+                    for m in self.messages]
+            if max_msgs is not None and len(msgs) > max_msgs:
+                msgs = msgs[-max_msgs:]
+            while max_chars is not None and len(msgs) > 2:
+                joined = "\n".join(msgs)
+                if len(joined) <= max_chars:
+                    break
+                msgs.pop(0)
+            parts = []
             if include_system and self.system_prompt:
                 parts.append(CHAT_TEMPLATE.format(role="system", content=self.system_prompt))
-            for msg in self.messages:
-                r = role_map.get(msg.role, msg.role)
-                parts.append(CHAT_TEMPLATE.format(role=r, content=msg.content))
+            parts.extend(msgs)
             if open_assistant:
                 parts.append("<|im_start|>assistant\n")
             return "\n".join(parts)
 
-    def to_openai_format(self) -> List[Dict]:
+    def to_openai_format(self, max_msgs: Optional[int] = None) -> List[Dict]:
         with self._lock:
             msgs = []
             if self.system_prompt:
                 msgs.append({"role": "system", "content": self.system_prompt})
-            for msg in self.messages:
+            history = self.messages
+            if max_msgs is not None and len(history) > max_msgs:
+                history = history[-max_msgs:]
+            for msg in history:
                 msgs.append({"role": msg.role, "content": msg.content})
             return msgs
 
@@ -78,6 +97,17 @@ class Conversation:
                 self._persist("clear", {})
             except Exception:
                 pass
+
+    def rollback_to(self, index: int):
+        """Drop any messages appended after ``index`` (concurrency-safe).
+
+        Used to undo the user turn when generation fails. Because the index is
+        captured before the user message is added, a concurrent request sharing
+        this conversation can never pop another thread's message.
+        """
+        with self._lock:
+            if 0 <= index < len(self.messages):
+                del self.messages[index:]
 
 
 class MemoryManager:

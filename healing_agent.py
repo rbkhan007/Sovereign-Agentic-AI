@@ -20,6 +20,7 @@ import ast
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -125,10 +126,7 @@ DIAGNOSIS:
         except subprocess.TimeoutExpired:
             return 124, "", f"Execution timed out after {timeout_s}s"
         finally:
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
+            shutil.rmtree(d, ignore_errors=True)
 
     def _log_attempt(self, payload: Dict[str, Any]) -> None:
         """Best-effort: store healing attempt to pgvector via your existing schema."""

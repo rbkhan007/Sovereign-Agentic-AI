@@ -29,6 +29,19 @@ from config import CONFIG, HAS_GPU
 logger = logging.getLogger(__name__)
 
 
+def _api_error(e: Exception) -> "HTTPException":
+    """Convert an unexpected handler exception into a generic 500.
+
+    Re-raises HTTPException unchanged so intentional status codes (4xx) keep
+    their message, while internal errors are logged server-side and only a
+    generic message reaches the client (no path/SQL/library details leak).
+    """
+    if isinstance(e, HTTPException):
+        return e
+    logger.exception("API handler error: %s", e)
+    return HTTPException(500, "Internal server error")
+
+
 class _RingHandler(logging.Handler):
     """In-memory ring buffer of recent log lines for the admin panel."""
 
@@ -233,6 +246,7 @@ def _rate_check(ip: str, path: str) -> bool:
     now = time.monotonic()
     window = 60.0
     with _rate_lock:
+        _rate_sweep(now, window)
         bucket = _rate_buckets.setdefault(key, collections.deque())
         while bucket and now - bucket[0] > window:
             bucket.popleft()
@@ -240,6 +254,16 @@ def _rate_check(ip: str, path: str) -> bool:
             return False
         bucket.append(now)
     return True
+
+
+def _rate_sweep(now: Optional[float] = None, window: float = 60.0) -> None:
+    """Drop buckets whose sliding window has fully drained (prevents unbounded
+    per-IP growth on the rate-limit map). Must hold _rate_lock when called."""
+    if now is None:
+        now = time.monotonic()
+    expired = [k for k, b in _rate_buckets.items() if not b or now - b[-1] > window]
+    for k in expired:
+        _rate_buckets.pop(k, None)
 
 
 def _rate_reset() -> None:
@@ -484,7 +508,7 @@ def load_model(name: str = Query(..., description="Model name to load")):
         model_manager.load(name)
         return {"status": "loaded", "model": name}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/models/unload")
@@ -504,7 +528,7 @@ def memory_search(req: MemorySearchRequest):
                                       workspace_id=req.workspace_id, agent_filter=req.agent)
         return {"results": results, "count": len(results)}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/memory/store")
@@ -514,7 +538,7 @@ def memory_store(req: MemoryStoreRequest):
         db.store_thought(req.agent, req.thought, workspace_id=req.workspace_id)
         return {"status": "stored"}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/memory/stats")
@@ -536,7 +560,7 @@ def db_stats_api():
         import database as db
         return db.db_stats()
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/memory/recent")
@@ -547,7 +571,7 @@ def memory_recent(limit: int = Query(default=20, le=100), agent: Optional[str] =
         results = db.recent_memories(limit=limit, agent=agent, workspace_id=workspace_id)
         return {"results": results, "count": len(results)}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/memory/clear")
@@ -557,7 +581,7 @@ def memory_clear(workspace_id: Optional[str] = None):
         deleted = db.clear_memories(workspace_id=workspace_id)
         return {"status": "cleared", "deleted": deleted}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/memory/prune")
@@ -568,7 +592,7 @@ def memory_prune(max_age_days: Optional[int] = None, workspace_id: Optional[str]
                                     workspace_id=workspace_id)
         return {"status": "pruned", "deleted": deleted}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 # ---------- Embeddings API ----------
 
@@ -594,7 +618,7 @@ def generate_embeddings(req: EmbeddingRequest):
             },
         }
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 # ---------- Health / System API ----------
 
@@ -673,7 +697,7 @@ def api_metrics_history(limit: int = Query(default=60, ge=1, le=500)):
         import database as db
         return {"snapshots": db.list_metrics_snapshots(limit=limit)}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/metrics/history")
@@ -687,7 +711,7 @@ def api_save_metrics_history(snapshot: dict):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/metrics/history/prune")
@@ -697,7 +721,7 @@ def api_prune_metrics_history(max_rows: int = Query(default=500, ge=1, le=5000))
         deleted = db.prune_metrics_snapshots(max_rows)
         return {"status": "pruned", "deleted": deleted}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/router/stats")
@@ -1095,7 +1119,7 @@ def api_list_sessions(
         import database as db
         return {"sessions": db.list_sessions(limit=limit, user_id=user_id)}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/sessions")
@@ -1110,7 +1134,7 @@ def api_create_session(req: SessionCreateRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/sessions/{session_id}")
@@ -1124,7 +1148,7 @@ def api_get_session(session_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/sessions/{session_id}/update")
@@ -1146,7 +1170,7 @@ def api_update_session(session_id: str, req: SessionUpdateRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.delete("/v1/sessions/{session_id}")
@@ -1160,7 +1184,7 @@ def api_delete_session(session_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/sessions/prune")
@@ -1170,7 +1194,7 @@ def api_prune_sessions(max_age_days: int = Query(default=30, ge=1, le=3650)):
         deleted = db.prune_sessions(max_age_days)
         return {"status": "pruned", "deleted": deleted}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 # ---------- Workspace API ----------
@@ -1186,7 +1210,7 @@ def list_workspaces():
         import database as db
         return {"workspaces": db.list_workspaces()}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/workspaces")
@@ -1204,7 +1228,7 @@ def create_workspace(req: WorkspaceRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/workspaces/{ws_id}/update")
@@ -1219,7 +1243,7 @@ def update_workspace(ws_id: str, req: WorkspaceUpdateRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/workspaces/{ws_id}/delete")
@@ -1235,7 +1259,7 @@ def delete_workspace(ws_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/workspaces/{ws_id}/files")
@@ -1249,7 +1273,7 @@ def list_workspace_files(ws_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/workspaces/{ws_id}/files/{name}/content")
@@ -1265,7 +1289,7 @@ def get_workspace_file_content(ws_id: str, name: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/workspaces/{ws_id}/files/upload")
@@ -1313,7 +1337,7 @@ def upload_workspace_file(ws_id: str, req: FileUploadRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/workspaces/{ws_id}/files/delete")
@@ -1340,7 +1364,7 @@ def delete_workspace_file(ws_id: str, name: str = Query(..., description="File n
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/workspaces/{ws_id}/knowledge/search")
@@ -1351,7 +1375,7 @@ def search_workspace_knowledge(ws_id: str, query: str = Query(..., description="
         results = db.search_workspace_knowledge(ws_id, query, limit=limit)
         return {"results": results, "count": len(results)}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 # ---------- Obsidian-like Knowledge Graph API ----------
@@ -1368,7 +1392,7 @@ def get_knowledge_graph(ws_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/workspaces/{ws_id}/backlinks")
@@ -1384,7 +1408,7 @@ def get_backlinks(ws_id: str, file: str = Query(..., description="Filename to fi
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/workspaces/{ws_id}/tags")
@@ -1400,7 +1424,7 @@ def get_all_tags(ws_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/workspaces/{ws_id}/tag/{tag}")
@@ -1416,7 +1440,7 @@ def get_files_by_tag(ws_id: str, tag: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/workspaces/{ws_id}/orphans")
@@ -1432,7 +1456,7 @@ def get_orphaned_files(ws_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/workspaces/{ws_id}/recent")
@@ -1448,7 +1472,7 @@ def get_recent_files(ws_id: str, limit: int = Query(default=10, le=50)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.get("/v1/workspaces/{ws_id}/resolve")
@@ -1470,7 +1494,7 @@ def resolve_wikilink(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 # ---------- Graph-Aware Vector Store API (nodes/edges/tags hybrid queries) ----------
@@ -1674,7 +1698,7 @@ def export_workspace(ws_id: str, format: str = Query(default="json", pattern="^(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/workspaces/{ws_id}/import")
@@ -1709,7 +1733,7 @@ def import_workspace(ws_id: str, req: ImportRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 # ---------- Admin API ----------
@@ -1938,7 +1962,7 @@ def raw_generate(req: GenerateRequest):
             },
         }
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 # ---------- Batch API ----------
 
@@ -2081,14 +2105,14 @@ def _full_response(req, user_msg, conv_id, system, workspace_id):
             system_override=system,
             model_override=req.model or None,
             parallel=req.parallel,
-            sandbox=req.sandbox,
+            sandbox=bool(CONFIG.sandbox or req.sandbox),
             temperature=req.temperature,
             max_tokens=req.max_tokens,
             workspace_id=workspace_id,
         )
     except Exception as e:
         logger.exception("Orch error")
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
     content = result.get("response") or ""
     usage_model = result.get("model") or req.model or "local"
     prompt_tokens = model_manager.count_tokens(user_msg, usage_model)
@@ -2435,7 +2459,7 @@ def tool_summarize(req: ToolRequest):
         text = model_manager.generate(model, prompt, max_tokens=req.max_length)
         return {"summary": text}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 @app.post("/v1/tools/analyze")
@@ -2454,7 +2478,7 @@ def tool_analyze(req: ToolRequest):
         text = model_manager.generate(model, prompt, max_tokens=req.max_length)
         return {"analysis": text}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 class TranslateRequest(BaseModel):
@@ -2474,7 +2498,7 @@ def tool_translate(req: TranslateRequest):
         text = model_manager.generate(model, prompt, max_tokens=512)
         return {"translation": text, "target_language": req.target_language}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 # ---------- Agents & Skills API ----------
 
@@ -2543,7 +2567,7 @@ def run_agent(name: str, req: AgentRunRequest):
         )
         return {"agent": name, "response": result["response"], "model": result.get("model")}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 @app.get("/v1/skills")
 def list_skills():
@@ -2594,7 +2618,7 @@ def run_skill(name: str, req: SkillRunRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 @app.post("/v1/agents")
 def create_agent(req: AgentCreateRequest):
@@ -2614,7 +2638,7 @@ def create_agent(req: AgentCreateRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 @app.delete("/v1/agents/{name}")
 def delete_agent(name: str):
@@ -2638,7 +2662,7 @@ def create_skill(req: SkillCreateRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 @app.delete("/v1/skills/{name}")
 def delete_skill(name: str):
@@ -3020,7 +3044,7 @@ def generate_image(req: ImageGenRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 # ---------- Vision API ----------
@@ -3044,7 +3068,7 @@ def analyze_image(req: VisionRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise _api_error(e)
 
 
 # ---------- Data Science (AutoML) API ----------
