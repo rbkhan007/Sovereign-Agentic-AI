@@ -17,8 +17,10 @@ export async function api(path: string, options: RequestInit = {}, timeout = 600
   const timer = setTimeout(() => controller.abort(), timeout);
   
   let token = '';
+  let adminKey = '';
   if (typeof window !== 'undefined') {
     token = (window as unknown as Record<string, string | undefined>).API_TOKEN || '';
+    adminKey = (window as unknown as Record<string, string | undefined>).ADMIN_KEY || '';
   }
   
   if (signal) {
@@ -32,6 +34,7 @@ export async function api(path: string, options: RequestInit = {}, timeout = 600
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(adminKey ? { 'X-Admin-Key': adminKey } : {}),
         ...options.headers,
       },
       signal: controller.signal,
@@ -285,12 +288,17 @@ export async function uploadChatFile(file: File): Promise<{ url: string; name: s
   const formData = new FormData();
   formData.append('file', file);
   let token = '';
+  let adminKey = '';
   if (typeof window !== 'undefined') {
     token = (window as unknown as Record<string, string | undefined>).API_TOKEN || '';
+    adminKey = (window as unknown as Record<string, string | undefined>).ADMIN_KEY || '';
   }
   const res = await fetch(`${getApiBase()}/v1/chat/upload`, {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(adminKey ? { 'X-Admin-Key': adminKey } : {}),
+    },
     body: formData,
   });
   if (!res.ok) {

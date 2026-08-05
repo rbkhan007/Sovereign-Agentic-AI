@@ -158,6 +158,141 @@ async def api_auth(request: Request, call_next):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
 
+
+# ---------- Rate limiting ----------
+
+_rate_buckets: Dict[str, "collections.deque[float]"] = {}
+_rate_lock = threading.Lock()
+
+# Endpoints that burn real compute / model time and deserve tighter limits.
+_HEAVY_ENDPOINT_PREFIXES = (
+    "/v1/chat/completions",
+    "/v1/chat/auto-stream",
+    "/v1/chat/stream",
+    "/v1/generate",
+    "/v1/batch/generate",
+    "/v1/embeddings",
+    "/v1/vision/analyze",
+    "/v1/images/generate",
+    "/v1/datascience/train",
+    "/v1/healing/run",
+    "/v1/computer/",
+    "/v1/loras/train",
+    "/v1/tools/",
+    "/v1/agents/",
+    "/v1/skills/",
+)
+
+
+def _is_heavy_endpoint(path: str) -> bool:
+    return any(path.startswith(p) for p in _HEAVY_ENDPOINT_PREFIXES)
+
+
+def _rate_check(ip: str, path: str) -> bool:
+    """Sliding-window per-IP rate check. Returns True when the request is allowed."""
+    cfg = CONFIG.rate_limit
+    limit = cfg["heavy_per_min"] if _is_heavy_endpoint(path) else cfg["light_per_min"]
+    key = f"{ip}:{limit}"
+    now = time.monotonic()
+    window = 60.0
+    with _rate_lock:
+        bucket = _rate_buckets.setdefault(key, collections.deque())
+        while bucket and now - bucket[0] > window:
+            bucket.popleft()
+        if len(bucket) >= limit:
+            return False
+        bucket.append(now)
+    return True
+
+
+def _rate_reset() -> None:
+    """Drop all recorded request buckets (used by POST /v1/rate/reset)."""
+    with _rate_lock:
+        _rate_buckets.clear()
+
+
+@app.middleware("http")
+async def api_rate_limit(request: Request, call_next):
+    if CONFIG.rate_limit.get("enabled") and (
+        request.url.path.startswith("/v1/") or request.url.path.startswith("/mcp")
+    ):
+        if request.url.path in ("/v1/health", "/v1/metrics"):
+            return await call_next(request)
+        client = request.client
+        ip = client.host if client else ""
+        if CONFIG.rate_limit.get("exempt_localhost") and ip in ("127.0.0.1", "::1", "localhost"):
+            return await call_next(request)
+        if not _rate_check(ip, request.url.path):
+            return JSONResponse(
+                {"detail": "Too many requests"}, status_code=429,
+                headers={"Retry-After": "60"},
+            )
+    return await call_next(request)
+
+
+# ---------- Admin gate ----------
+
+# Control-plane mutations that can change credentials, model config, or the
+# storage/database layer. These are the endpoints a LAN attacker would use to
+# take over the box, so they require the admin key (when one is configured).
+def _is_admin_mutation(method: str, path: str) -> bool:
+    if method not in ("POST", "DELETE", "PUT", "PATCH"):
+        return False
+    if path.startswith("/v1/config"):
+        return True
+    if path in ("/v1/models/load", "/v1/models/unload"):
+        return True
+    if path.startswith("/v1/router/harness/reset") or path.startswith("/v1/router/harness/adjust"):
+        return True
+    if path.startswith("/v1/loras/"):
+        return True
+    if path.startswith("/v1/memory/clear") or path.startswith("/v1/memory/prune"):
+        return True
+    if path.startswith("/v1/graph/nodes") or path.startswith("/v1/graph/edges"):
+        return True
+    if path.startswith("/v1/graph/sync") or path.startswith("/v1/graph/migrate"):
+        return True
+    if path.startswith("/v1/workspaces") and not path.endswith("/knowledge/search"):
+        return True
+    if path.startswith("/v1/agents") and not path.endswith("/run"):
+        return True
+    if path.startswith("/v1/skills") and not path.endswith("/run"):
+        return True
+    if path.startswith("/v1/images/generate") or path.startswith("/v1/vision/analyze"):
+        return True
+    if path.startswith("/v1/datascience/train") or path.startswith("/v1/healing/run"):
+        return True
+    if path.startswith("/v1/computer/run") or path.startswith("/v1/computer/stream"):
+        return True
+    if path.startswith("/v1/memory/store"):
+        return True
+    if path.startswith("/v1/rate/reset"):
+        return True
+    if path.startswith("/v1/chat/clear") or path.startswith("/v1/chat/conversations"):
+        return True
+    return False
+
+
+@app.middleware("http")
+async def admin_gate(request: Request, call_next):
+    """Require admin auth for control-plane mutations when auth is configured.
+
+    Accepts either the admin key (via ``X-Admin-Key`` header) or any valid
+    API token (Bearer), so an operator who only sets ``--api-token`` can still
+    manage the box while LAN clients on the same token are locked out of
+    mutations. When no admin key and no API tokens are configured the gate is
+    inert (matching the rest of the auth system).
+    """
+    if CONFIG.admin_key and _is_admin_mutation(request.method, request.url.path):
+        presented = request.headers.get("x-admin-key", "")
+        bearer = request.headers.get("authorization", "")
+        ok = CONFIG.admin_authorized(presented)
+        if not ok and bearer.startswith("Bearer "):
+            ok = CONFIG.token_authorized(bearer[7:])
+        if not ok:
+            return JSONResponse({"detail": "Admin key required"}, status_code=403)
+    return await call_next(request)
+
 # ---------- Pydantic Models ----------
 
 class ChatMessage(BaseModel):
@@ -505,6 +640,13 @@ def harness_export():
     return orchestrator.router.harness.export_stats()
 
 
+@app.post("/v1/rate/reset")
+def rate_reset():
+    """Drop all recorded per-IP rate-limit buckets."""
+    _rate_reset()
+    return {"status": "ok", "message": "Rate-limit buckets cleared"}
+
+
 @app.get("/v1/hardware")
 def hardware_info(refresh: bool = False):
     import hardware
@@ -567,6 +709,13 @@ def get_config():
         },
         "api_token": bool(CONFIG.valid_api_tokens()),
         "api_token_count": len(CONFIG.valid_api_tokens()),
+        "admin_key": bool(CONFIG.admin_key),
+        "rate_limit": {
+            "enabled": CONFIG.rate_limit.get("enabled", False),
+            "light_per_min": CONFIG.rate_limit.get("light_per_min", 120),
+            "heavy_per_min": CONFIG.rate_limit.get("heavy_per_min", 10),
+            "exempt_localhost": CONFIG.rate_limit.get("exempt_localhost", True),
+        },
         "models": [
             {
                 "name": m.name,
@@ -695,6 +844,24 @@ def update_config(req: ConfigUpdate):
         return {"status": "updated", "key": req.key,
                 "value": bool(CONFIG.api_token),
                 "accepted": len(CONFIG.valid_api_tokens())}
+    if req.key == "admin_key":
+        CONFIG.admin_key = str(req.value).strip()
+        return {"status": "updated", "key": req.key, "value": bool(CONFIG.admin_key)}
+    if req.key.startswith("rate_limit."):
+        attr = req.key.split(".")[1]
+        if attr == "enabled":
+            raw = str(req.value).strip().lower()
+            CONFIG.rate_limit["enabled"] = raw in ("1", "true", "yes", "on")
+            return {"status": "updated", "key": req.key, "value": CONFIG.rate_limit["enabled"]}
+        if attr == "exempt_localhost":
+            raw = str(req.value).strip().lower()
+            CONFIG.rate_limit["exempt_localhost"] = raw in ("1", "true", "yes", "on")
+            return {"status": "updated", "key": req.key, "value": CONFIG.rate_limit["exempt_localhost"]}
+        if attr in ("light_per_min", "heavy_per_min"):
+            v = max(1, int(req.value))
+            CONFIG.rate_limit[attr] = v
+            return {"status": "updated", "key": req.key, "value": v}
+        raise HTTPException(400, f"Unsupported rate_limit key: {attr}")
     if req.key not in key_map and not req.key.startswith("model."):
         raise HTTPException(400, f"Unknown config key: {req.key}")
 

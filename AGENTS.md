@@ -13,6 +13,10 @@ python run_deep_audit.py         # Full static audit: mypy + pyflakes + bandit +
 python run.py --port 8080        # Custom port
 python run.py --threads 4        # Override CPU threads (propagated to models)
 python run.py --api-token secret # Require Bearer token on /v1/* and /mcp (comma-separated = rotation set, first is primary; env API_TOKEN / LLM_API_TOKENS)
+python run.py --admin-key secret # Require X-Admin-Key header for control-plane mutations (POST /v1/config, model load/unload, agents/skills/loras writes, harness reset/adjust, memory clear/prune, workspace/graph writes; env LLM_ADMIN_KEY)
+python run.py --rate-limit         # Enable per-IP rate limiting on /v1/* and /mcp (light 120/min, heavy 10/min; env LLM_RATE_LIMIT=on)
+python run.py --rate-light 300 --rate-heavy 20  # Tune rate-limit buckets per IP per minute (env LLM_RATE_LIGHT / LLM_RATE_HEAVY)
+python run.py --no-rate-exempt-local            # Do NOT exempt 127.0.0.1/::1 from rate limits (env LLM_RATE_EXEMPT_LOCAL=off)
 python run.py --no-parallel      # Disable parallel multi-model generation
 python run.py --parallel-max 3   # Max models to run in parallel (default 2)
 python run.py --no-parallel-load # Load models one at a time (disable concurrent loading)
@@ -109,6 +113,7 @@ GET  /v1/router/stats            # Adaptive harness fitness scores
 POST /v1/router/harness/reset    # Reset harness scores to defaults
 POST /v1/router/harness/adjust   # Manually adjust a task/model score
 GET  /v1/router/harness/export   # Export harness stats as JSON
+POST /v1/rate/reset              # Drop all per-IP rate-limit buckets
 GET  /v1/hardware                # Detected RAM / VRAM / GPU backend (?refresh=1 forces a fresh probe; otherwise live readings are overlaid on cached static info)
 GET  /v1/config                  # Get config (incl. models[], db.host/port/user, api_token)
 POST /v1/config                  # Update config (threads, prune.*, vram.*, harness.*, gen.timeout_s, cloud.provider, image_gen.enabled, vision.enabled/model/max_tokens; dynamic model.<name>.temperature/max_tokens/n_ctx/top_p/role)

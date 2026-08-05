@@ -81,6 +81,7 @@ class AppConfig:
     gpu_name: str = ""
     api_token: str = ""
     api_tokens: Tuple[str, ...] = ()
+    admin_key: str = ""
     parallel_enabled: bool = False
     parallel_max: int = 2
     parallel_judge: bool = True
@@ -135,6 +136,12 @@ class AppConfig:
     computer: dict = field(default_factory=lambda: {
         "allow_unsafe": False,
         "max_steps": 25,
+    })
+    rate_limit: dict = field(default_factory=lambda: {
+        "enabled": False,
+        "light_per_min": 120,
+        "heavy_per_min": 10,
+        "exempt_localhost": True,
     })
     db: DBConfig = field(default_factory=DBConfig)
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
@@ -252,6 +259,16 @@ class AppConfig:
             self.healing["enabled"] = True
         if os.environ.get("LLM_ALLOW_UNSAFE_COMPUTER", "").strip().lower() in ("1", "true", "yes", "on"):
             self.computer["allow_unsafe"] = True
+        if os.environ.get("LLM_ADMIN_KEY", "").strip():
+            self.admin_key = os.environ["LLM_ADMIN_KEY"].strip()
+        if os.environ.get("LLM_RATE_LIMIT", "").strip().lower() in ("1", "true", "yes", "on"):
+            self.rate_limit["enabled"] = True
+        if os.environ.get("LLM_RATE_LIGHT", "").strip().isdigit():
+            self.rate_limit["light_per_min"] = max(1, int(os.environ["LLM_RATE_LIGHT"]))
+        if os.environ.get("LLM_RATE_HEAVY", "").strip().isdigit():
+            self.rate_limit["heavy_per_min"] = max(1, int(os.environ["LLM_RATE_HEAVY"]))
+        if os.environ.get("LLM_RATE_EXEMPT_LOCAL", "").strip().lower() in ("0", "false", "off", "no"):
+            self.rate_limit["exempt_localhost"] = False
         if not self.lora_dir:
             self.lora_dir = os.path.join(BASE_DIR, "loras")
         if os.environ.get("PGHOST", "").strip():
@@ -292,6 +309,17 @@ class AppConfig:
         if self.api_token and hmac.compare_digest(presented, self.api_token):
             return True
         return any(hmac.compare_digest(presented, t) for t in self.api_tokens)
+
+    def admin_authorized(self, presented: str) -> bool:
+        """Constant-time check that `presented` matches the admin key.
+
+        Returns True when the presented value matches the configured admin key.
+        When no admin key is configured, returns False (the caller decides
+        whether to fall back to the normal API token path).
+        """
+        if not presented or not self.admin_key:
+            return False
+        return hmac.compare_digest(presented, self.admin_key)
 
     def _discovered_models(self) -> List[ModelConfig]:
         """Register any .gguf dropped into models/ that is not already configured."""

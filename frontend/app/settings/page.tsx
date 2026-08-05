@@ -313,6 +313,39 @@ export default function SettingsPage() {
         </div>
       </Section>
 
+      {/* Security Section */}
+      <Section title="Security" icon={<Shield size={20} />} description="Admin key and per-IP rate limiting">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Field label="Admin Key" hint="Required via X-Admin-Key for control-plane mutations (config, model load, agent/skill/LoRA writes)">
+            <Input
+              value={String(config.admin_key ? 'set' : '')}
+              disabled
+              placeholder="Set at startup via run.py --admin-key or LLM_ADMIN_KEY"
+            />
+          </Field>
+          <Field label="Rate Limit (light/min)">
+            <Input type="number" min="1" value={String((config.rate_limit as Record<string, unknown> | undefined)?.light_per_min ?? 120)} onChange={e => update('rate_limit.light_per_min', parseInt(e.target.value))} />
+          </Field>
+          <Field label="Rate Limit (heavy/min)">
+            <Input type="number" min="1" value={String((config.rate_limit as Record<string, unknown> | undefined)?.heavy_per_min ?? 10)} onChange={e => update('rate_limit.heavy_per_min', parseInt(e.target.value))} />
+          </Field>
+        </div>
+        <div className="mt-4 space-y-3">
+          <Switch
+            label="Per-IP Rate Limiting"
+            checked={Boolean((config.rate_limit as Record<string, unknown> | undefined)?.enabled)}
+            onChange={v => update('rate_limit.enabled', v)}
+            hint="Throttle /v1/* and /mcp by client IP (heavy endpoints: chat, generate, batch, vision, images, tools)"
+          />
+          <Switch
+            label="Exempt Localhost from Rate Limits"
+            checked={Boolean((config.rate_limit as Record<string, unknown> | undefined)?.exempt_localhost ?? true)}
+            onChange={v => update('rate_limit.exempt_localhost', v)}
+            hint="Skip rate limiting for 127.0.0.1 / ::1 clients"
+          />
+        </div>
+      </Section>
+
       {/* Model Tuning Section */}
       <Section title={t('settings.modelTuning')} icon={<Cpu size={20} />} description="Per-model generation parameters">
         <div className="space-y-4">

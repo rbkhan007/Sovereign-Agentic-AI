@@ -295,6 +295,16 @@ def main():
                         help="PERMIT the healing agent to execute caller-supplied Python (RCE risk; local opt-in only)")
     parser.add_argument("--allow-unsafe-computer", action="store_true",
                         help="PERMIT the /v1/computer/* API to run un-sandboxed (shell/python RCE risk; local opt-in only)")
+    parser.add_argument("--admin-key", metavar="KEY",
+                        help="Admin key (X-Admin-Key header) required for control-plane mutations like POST /v1/config, model load/unload, agent/skill/LoRA writes")
+    parser.add_argument("--rate-limit", action="store_true",
+                        help="Enable per-IP rate limiting on /v1/* and /mcp (light + heavy buckets)")
+    parser.add_argument("--rate-light", metavar="N", type=int, default=120,
+                        help="Max light requests per IP per minute (default 120)")
+    parser.add_argument("--rate-heavy", metavar="N", type=int, default=10,
+                        help="Max heavy/generation requests per IP per minute (default 10)")
+    parser.add_argument("--no-rate-exempt-local", action="store_true",
+                        help="Do NOT exempt 127.0.0.1/::1 from rate limits")
 
     args = parser.parse_args()
     from config import CONFIG
@@ -397,6 +407,16 @@ def main():
     if args.allow_unsafe_computer:
         CONFIG.computer["allow_unsafe"] = True
         logger.warning("Computer agent /v1/computer/* MAY EXECUTE shell/python (--allow-unsafe-computer)")
+    if args.admin_key:
+        CONFIG.admin_key = args.admin_key.strip()
+        logger.info("Admin key set: control-plane mutations require X-Admin-Key")
+    if args.rate_limit:
+        CONFIG.rate_limit["enabled"] = True
+        logger.info(f"Per-IP rate limiting enabled ({args.rate_light} light/min, {args.rate_heavy} heavy/min)")
+    CONFIG.rate_limit["light_per_min"] = max(1, args.rate_light)
+    CONFIG.rate_limit["heavy_per_min"] = max(1, args.rate_heavy)
+    if args.no_rate_exempt_local:
+        CONFIG.rate_limit["exempt_localhost"] = False
     if args.web_search:
         CONFIG.web_search_enabled = True
         logger.info("Web search enabled (DuckDuckGo)")

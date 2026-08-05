@@ -216,20 +216,23 @@ def _is_loopback(request: Request) -> bool:
 
 def _auth_bootstrap(loopback: bool = True) -> str:
     token = getattr(CONFIG, "api_token", "") or ""
-    if not token:
+    admin_key = getattr(CONFIG, "admin_key", "") or ""
+    if not token and not admin_key:
         return ""
     # Only embed the API token for loopback clients. Embedding it in HTML served
     # on a non-loopback bind would hand the token to anyone who can reach the
     # port, defeating --api-token. Remote/LAN clients must authenticate out of band.
     if not loopback:
-        logger.warning("API token set but client is non-loopback; token withheld from HTML")
+        logger.warning("API token/admin key set but client is non-loopback; token withheld from HTML")
         return ""
     token_js = json.dumps(token).replace("<", "\\u003c").replace(">", "\\u003e")
+    admin_js = json.dumps(admin_key).replace("<", "\\u003c").replace(">", "\\u003e")
     return (
-        "<script>window.API_TOKEN=" + token_js +
-        ";if(window.API_TOKEN){var _f=window.fetch;window.fetch=function(u,o){o=o||{};"
+        "<script>window.API_TOKEN=" + token_js + ";window.ADMIN_KEY=" + admin_js +
+        ";if(window.API_TOKEN||window.ADMIN_KEY){var _f=window.fetch;window.fetch=function(u,o){o=o||{};"
         "o.headers=o.headers||{};if(typeof u==='string'&&(u.indexOf('/v1/')===0||u.indexOf('/mcp')===0))"
-        "{o.headers['Authorization']='Bearer '+window.API_TOKEN;}return _f.call(this,u,o);};}</script>"
+        "{if(window.API_TOKEN){o.headers['Authorization']='Bearer '+window.API_TOKEN;}"
+        "if(window.ADMIN_KEY){o.headers['X-Admin-Key']=window.ADMIN_KEY;}}return _f.call(this,u,o);};}</script>"
     )
 
 
