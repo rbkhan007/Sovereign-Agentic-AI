@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sovereign-llm"
+version = "1.0.0"
+description = "Local multi-agent LLM runtime: planning, RAG/memory, vision, image gen, and AutoML (Auto-Sklearn)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "Rakibul Hasan (Rhasan_Indie_dev)"},
+]
+keywords = ["llm", "local-llm", "agentic", "rag", "auto-llm", "ai"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "fastapi>=0.100.0",
+  "uvicorn>=0.23.0",
+  "llama-cpp-python>=0.2.0",
+  "psycopg2-binary>=2.9.0",
+  "sentence-transformers>=2.0.0",
+  "torch>=2.0.0",
+  "openai>=1.0.0",
+  "httpx>=0.24.0",
+  "numpy>=1.24.0",
+  "pydantic>=2.0.0",
+  "duckduckgo-search>=6.3.0",
+  "peft>=0.8.0",
+  "datasets>=2.18.0",
+  "transformers>=4.40.0",
+  "diffusers>=0.25.0",
+  "pillow>=10.0.0",
+  "psutil>=5.9.0",
+]
+
+[project.optional-dependencies]
+data-science = [
+  "pandas>=2.0.0",
+  "scikit-learn>=1.3.0",
+  "joblib>=1.3.0",
+  "auto-sklearn>=0.15.0",  # Linux-only wheels
+]
+dev = [
+  "pytest>=7.4.0",
+  "mypy>=1.0.0",
+  "pylint>=3.0.0",
+  "pyflakes>=3.0.0",
+  "bandit>=0.36.0",
+  "vulture>=2.4.0",
+  "pydocstyle>=6.0.0",
+]
+chat = ["python-multipart>=0.0.6"]
+pdf = ["pypdf>=4.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/Rhasan-Indie-dev/Sovereign-Agentic-AI"
+Repository = "https://github.com/Rhasan-Indie-dev/Sovereign-Agentic-AI.git"
+Documentation = "https://github.com/Rhasan-Indie-dev/Sovereign-Agentic-AI#readme"
+
+[project.scripts]
+sovereign-llm = "run:main"
+sovereign-llm-web = "run:main_web"
+sovereign-llm-cli = "run:main_cli"
+sovereign-llm-api = "run:main_api"
+
+[tool.setuptools]
+py-modules = [
+  "run", "api", "cli", "config", "models", "memory", "database", "router",
+  "hardware", "metrics", "arc", "orchestrator", "agents", "graph_store",
+  "wiki_links", "lora_manager", "image_gen", "vision", "data_science_agent",
+  "computer_agent", "audit",
+]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = false

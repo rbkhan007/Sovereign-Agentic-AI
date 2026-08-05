@@ -1,0 +1,6 @@
+[MASTER]
+max-line-length=120
+max-module-lines=3000
+
+[MESSAGES CONTROL]
+disable=C0103,C0114,C0116,C0115,C0302,C0301,C0303,R0912,R0913,R0914,R0915,R0917,R0902,R0903,R1702,W0201,W0622,R1705,R0911,R1710,W1510,R1732,R1735,W0603,W0611,W1514,C1803,R1716,R0801,R0401,C0410,C0412,C0411,W0404,C0413,W0212,import-outside-toplevel,broad-exception-caught,logging-fstring-interpolation,redefined-outer-name,unused-argument,raise-missing-from,import-error

@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+.mypy_cache/
+
+# Large model files
+models/*.gguf
+
+# Log files
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Sessions
+sessions/
+
+# Generated artifacts
+generated/
+lora_datasets/
+FULL_LISTING.txt
+
+# Environment / secrets
+.env
+*.env.local
+
+# Frontend build cache
+frontend/.next/
