@@ -293,6 +293,8 @@ def main():
                         help="Enable the self-healing diagnostic agent (diagnoses + fixes Python code)")
     parser.add_argument("--allow-unsafe-healing", action="store_true",
                         help="PERMIT the healing agent to execute caller-supplied Python (RCE risk; local opt-in only)")
+    parser.add_argument("--allow-unsafe-computer", action="store_true",
+                        help="PERMIT the /v1/computer/* API to run un-sandboxed (shell/python RCE risk; local opt-in only)")
 
     args = parser.parse_args()
     from config import CONFIG
@@ -392,6 +394,9 @@ def main():
     if args.allow_unsafe_healing:
         CONFIG.healing["allow_unsafe"] = True
         logger.warning("Healing agent MAY EXECUTE caller-supplied Python (--allow-unsafe-healing)")
+    if args.allow_unsafe_computer:
+        CONFIG.computer["allow_unsafe"] = True
+        logger.warning("Computer agent /v1/computer/* MAY EXECUTE shell/python (--allow-unsafe-computer)")
     if args.web_search:
         CONFIG.web_search_enabled = True
         logger.info("Web search enabled (DuckDuckGo)")

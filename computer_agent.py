@@ -27,6 +27,11 @@ _DANGEROUS_CMDS = {
     "shutdown", "reboot", "halt", "init 0", "init 6", "rd /s", "rmdir /s",
 }
 
+_DANGEROUS_TOKENS = {
+    "shutdown", "reboot", "halt", "mkfs", "diskpart", "format",
+    "dd", "del", "erase", "rd", "rmdir", "deltree",
+}
+
 _MAX_TOOL_OUTPUT = 8000
 _MAX_STEPS = 25
 _TOOL_TIMEOUT = 120
@@ -89,8 +94,32 @@ def _truncate(text: str, limit: int = _MAX_TOOL_OUTPUT) -> str:
 
 
 def _is_dangerous(cmd: str) -> bool:
-    low = cmd.lower().strip()
-    return any(d in low for d in _DANGEROUS_CMDS)
+    """Token-aware guard against destructive shell commands.
+
+    Catches both the literal blocklist patterns and obfuscated forms such as
+    extra whitespace, quoting, ``python -c``/``cmd /c`` wrappers, and commands
+    that recurse-delete a whole drive or root filesystem.
+    """
+    if not cmd or not cmd.strip():
+        return True
+    low = " ".join(cmd.lower().split())
+    if any(d in low for d in _DANGEROUS_CMDS):
+        return True
+    tokens = low.replace("(", " ").replace(")", " ").split()
+    if not tokens:
+        return False
+    for tok in tokens:
+        base = tok.strip("\"'`/\\").lstrip("-").split(".")[0]
+        if base in _DANGEROUS_TOKENS and tok not in ("echo",):
+            return True
+    if any(op in low for op in ("> /dev/sd", ">\\\\.\\", "format /q")):
+        return True
+    if low.startswith(("python ", "python3 ", "cmd /c", "cmd.exe", "powershell")):
+        if any(k in low for k in ("rmtree", "shutil.rmtree", "removefile",
+                                  "os.remove", "os.unlink", "subprocess.call",
+                                  "eval(", "exec(", "os.system")):
+            return True
+    return False
 
 
 def _tool_shell(command: str, timeout: int = _TOOL_TIMEOUT) -> ToolResult:

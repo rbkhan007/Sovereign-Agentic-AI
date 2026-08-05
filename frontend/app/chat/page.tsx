@@ -379,6 +379,13 @@ export default function ChatPage() {
   }, []);
 
   async function clearChat() {
+    if (!window.confirm('Are you sure you want to clear the current conversation? This cannot be undone.')) {
+      return;
+    }
+    await doClearChat();
+  }
+
+  async function doClearChat() {
     setMessages([]);
     setConvId('');
     setCurrentConvTitle('');
@@ -390,7 +397,7 @@ export default function ChatPage() {
   }
 
   async function createNewChat() {
-    await clearChat();
+    await doClearChat();
   }
 
   async function deleteConversation(id: string) {

@@ -1,5 +1,6 @@
 import logging
 import re
+import threading
 import time as _time
 from typing import Optional, List, Callable, Dict
 from dataclasses import dataclass
@@ -16,26 +17,70 @@ import database as db
 
 logger = logging.getLogger(__name__)
 
+_WEB_CACHE_TTL_S = 300
+_WEB_CACHE_MAX = 64
+_search_cache: dict = {}
+_search_cache_lock = threading.Lock()
+
+
+def _search_cache_get(key: str) -> Optional[str]:
+    with _search_cache_lock:
+        entry = _search_cache.get(key)
+    if entry is None:
+        return None
+    if _time.time() - entry["ts"] > _WEB_CACHE_TTL_S:
+        return None
+    return entry["data"]
+
+
+def _search_cache_put(key: str, data: str) -> None:
+    now = _time.time()
+    with _search_cache_lock:
+        _search_cache[key] = {"ts": now, "data": data}
+        if len(_search_cache) > _WEB_CACHE_MAX:
+            for stale in sorted(
+                _search_cache, key=lambda k: _search_cache[k]["ts"]
+            )[: len(_search_cache) - _WEB_CACHE_MAX]:
+                _search_cache.pop(stale, None)
+
+
+def _ddg_search(query: str, max_results: int = 3) -> str:
+    from duckduckgo_search import DDGS
+    with DDGS() as ddgs:
+        results = []
+        for r in ddgs.text(query, max_results=max_results):
+            title = r.get('title', '').strip()
+            body = r.get('body', '').strip()
+            if body:
+                results.append(f"• {title}\n  {body[:500]}")
+            else:
+                results.append(f"• {title}")
+        if results:
+            return "【Web Search Results】\n" + "\n\n".join(results) + "\n【End of Results】"
+        return "No results found."
+
 
 def search_web(query: str, max_results: int = 3) -> str:
-    """Search DuckDuckGo and return formatted text snippets."""
-    try:
-        from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
-            results = []
-            for r in ddgs.text(query, max_results=max_results):
-                title = r.get('title', '').strip()
-                body = r.get('body', '').strip()
-                if body:
-                    results.append(f"• {title}\n  {body[:500]}")
-                else:
-                    results.append(f"• {title}")
-            if results:
-                return "【Web Search Results】\n" + "\n\n".join(results) + "\n【End of Results】"
-            return "No results found."
-    except Exception as e:
-        logger.warning(f"Web search failed: {e}")
-        return f"Search error: {e}"
+    """Search DuckDuckGo with a TTL cache + one retry on transient failure."""
+    key = f"{query}|{max_results}"
+    cached = _search_cache_get(key)
+    if cached is not None:
+        return cached
+    for attempt in range(2):
+        try:
+            data = _ddg_search(query, max_results)
+            _search_cache_put(key, data)
+            return data
+        except Exception as e:
+            if attempt == 0:
+                logger.warning(f"Web search failed (retrying): {e}")
+                continue
+            logger.warning(f"Web search failed: {e}")
+            stale = _search_cache_get(key)
+            if stale is not None:
+                return stale
+            return f"Search error: {e}"
+    return "Search error: unavailable"
 
 SYSTEM_PROMPT = (
     "You are a helpful, precise AI assistant. "

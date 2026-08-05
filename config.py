@@ -132,6 +132,10 @@ class AppConfig:
         "diagnostician_model": "hy-mt2",
         "fixer_model": "qwen2.5-3b",
     })
+    computer: dict = field(default_factory=lambda: {
+        "allow_unsafe": False,
+        "max_steps": 25,
+    })
     db: DBConfig = field(default_factory=DBConfig)
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
 
@@ -246,6 +250,8 @@ class AppConfig:
             self.automl["time_limit"] = int(os.environ["LLM_AUTOML_TIME_LIMIT"].strip())
         if os.environ.get("LLM_HEALING", "").strip().lower() in ("1", "true", "yes", "on"):
             self.healing["enabled"] = True
+        if os.environ.get("LLM_ALLOW_UNSAFE_COMPUTER", "").strip().lower() in ("1", "true", "yes", "on"):
+            self.computer["allow_unsafe"] = True
         if not self.lora_dir:
             self.lora_dir = os.path.join(BASE_DIR, "loras")
         if os.environ.get("PGHOST", "").strip():

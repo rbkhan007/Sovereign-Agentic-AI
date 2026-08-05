@@ -57,12 +57,23 @@ export default function SettingsPage() {
 
   useEffect(() => { load(); }, []);
 
+  const KEY_MAP: Record<string, string> = {
+    vram_budget_mb: 'vram.budget_mb',
+    parallel_max: 'parallel.max',
+    prune_interval_hours: 'prune.interval_hours',
+    prune_max_age_days: 'prune.max_age_days',
+    gen_timeout_s: 'gen.timeout_s',
+  };
+
   const update = useCallback(async (key: string, value: unknown) => {
+    const backendKey = key.startsWith('models.')
+      ? `model.${key.slice('models.'.length)}`
+      : (KEY_MAP[key] || key);
     setSaving(true);
     try {
       await fetchJSON('/v1/config', {
         method: 'POST',
-        body: JSON.stringify({ key, value }),
+        body: JSON.stringify({ key: backendKey, value }),
       });
       addToast('Config updated', 'success');
       load();
@@ -291,13 +302,13 @@ export default function SettingsPage() {
       </Section>
 
       {/* Server Section */}
-      <Section title={t('settings.server')} icon={<Server size={20} />} description="Backend connection settings">
+      <Section title={t('settings.server')} icon={<Server size={20} />} description="Backend connection settings (host/port require a restart to change)">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Field label={t('settings.host')}>
-            <Input value={String(config.host || 'localhost')} onChange={e => update('host', e.target.value)} />
+            <Input value={String(config.host || 'localhost')} disabled hint="Set at startup via run.py --host" />
           </Field>
           <Field label={t('settings.port')}>
-            <Input type="number" value={String(config.port || 8070)} onChange={e => update('port', parseInt(e.target.value) || 8070)} />
+            <Input type="number" value={String(config.port || 8070)} disabled hint="Set at startup via run.py --port" />
           </Field>
         </div>
       </Section>
@@ -366,19 +377,19 @@ export default function SettingsPage() {
             <Input type="number" min="1" value={String(config.threads ?? 4)} onChange={e => update('threads', parseInt(e.target.value))} />
           </Field>
           <Field label={t('settings.vramBudget')}>
-            <Input type="number" min="256" value={String(config.vram_budget_mb ?? 4096)} onChange={e => update('vram_budget_mb', parseInt(e.target.value))} />
+            <Input type="number" min="256" value={String((config.vram as Record<string, unknown> | undefined)?.budget_mb ?? 4096)} onChange={e => update('vram_budget_mb', parseInt(e.target.value))} />
           </Field>
           <Field label={t('settings.parallelMax')}>
-            <Input type="number" min="1" value={String(config.parallel_max ?? 2)} onChange={e => update('parallel_max', parseInt(e.target.value))} />
+            <Input type="number" min="1" value={String((config.parallel as Record<string, unknown> | undefined)?.max ?? 2)} onChange={e => update('parallel_max', parseInt(e.target.value))} />
           </Field>
           <Field label={t('settings.pruneInterval')}>
-            <Input type="number" min="1" value={String(config.prune_interval_hours ?? 6)} onChange={e => update('prune_interval_hours', parseInt(e.target.value))} />
+            <Input type="number" min="1" value={String((config.prune as Record<string, unknown> | undefined)?.interval_hours ?? 6)} onChange={e => update('prune_interval_hours', parseInt(e.target.value))} />
           </Field>
           <Field label={t('settings.pruneMaxAge')}>
-            <Input type="number" min="1" value={String(config.prune_max_age_days ?? 30)} onChange={e => update('prune_max_age_days', parseInt(e.target.value))} />
+            <Input type="number" min="1" value={String((config.prune as Record<string, unknown> | undefined)?.max_age_days ?? 30)} onChange={e => update('prune_max_age_days', parseInt(e.target.value))} />
           </Field>
           <Field label={t('settings.genTimeout')}>
-            <Input type="number" min="5" value={String(config.gen_timeout_s ?? 240)} onChange={e => update('gen_timeout_s', parseFloat(e.target.value))} />
+            <Input type="number" min="5" value={String((config.gen as Record<string, unknown> | undefined)?.timeout_s ?? 240)} onChange={e => update('gen_timeout_s', parseFloat(e.target.value))} />
           </Field>
         </div>
 

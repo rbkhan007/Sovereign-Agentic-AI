@@ -1354,6 +1354,15 @@ def computer_tools():
                        for t in agent.registry.list_tools()]}
 
 
+def _computer_sandbox(req) -> bool:
+    """Sandbox is ON by default for the HTTP surface unless the operator
+    explicitly opts in to full access (CONFIG.computer['allow_unsafe']).
+    A caller can never downgrade to full access on its own."""
+    if CONFIG.computer.get("allow_unsafe"):
+        return bool(CONFIG.sandbox or req.sandbox)
+    return True
+
+
 class ComputerRunRequest(BaseModel):
     goal: str
     sandbox: bool = False
@@ -1370,8 +1379,9 @@ class ComputerRunRequest(BaseModel):
 @app.post("/v1/computer/run")
 def computer_run(req: ComputerRunRequest):
     from computer_agent import create_computer_agent
+    sandbox = _computer_sandbox(req)
     agent = create_computer_agent(model_manager, orchestrator,
-                                  sandbox=bool(CONFIG.sandbox or req.sandbox), max_steps=req.max_steps)
+                                  sandbox=sandbox, max_steps=req.max_steps)
     result = agent.run(req.goal)
     return {
         "success": result.success,
@@ -1392,12 +1402,29 @@ async def computer_stream(req: ComputerRunRequest):
     from computer_agent import create_computer_agent
     import json as _json
 
+    sandbox = _computer_sandbox(req)
     agent = create_computer_agent(model_manager, orchestrator,
-                                  sandbox=bool(CONFIG.sandbox or req.sandbox), max_steps=req.max_steps)
+                                  sandbox=sandbox, max_steps=req.max_steps)
 
     async def event_gen():
-        for event in agent.run_stream(req.goal):
-            yield f"data: {_json.dumps(event)}\n\n"
+        queue = asyncio.Queue()
+        stop = threading.Event()
+        task = asyncio.get_running_loop().run_in_executor(
+            None, _run_stream_in_worker,
+            agent.run_stream(req.goal),
+            queue,
+            stop,
+        )
+        try:
+            while True:
+                evt = await queue.get()
+                if evt.get("type") == "done":
+                    break
+                yield f"data: {_json.dumps(evt)}\n\n"
+        finally:
+            stop.set()
+            if not task.done():
+                task.cancel()
         yield f"data: {_json.dumps({'type': 'done'})}\n\n"
 
     from starlette.responses import StreamingResponse
@@ -1702,7 +1729,34 @@ def _run_stream_in_worker(events, queue, stop):
 
 
 def _stream_response(req, user_msg, conv_id, system, workspace_id):
+    """OpenAI-compatible SSE for /v1/chat/completions?stream=true.
+
+    Emits ``choices[].delta.content`` chunks plus a final ``finish_reason``
+    frame and ``data: [DONE]`` so OpenAI SDK / LangChain / LiteLLM clients
+    can parse the stream. Internal thinking events are exposed as a
+    top-level ``thinking`` field on each chunk (ignored by strict parsers).
+    """
     async def generate():
+        model = req.model or "local"
+        created = int(time.time())
+        sid = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+
+        def chunk(delta: Optional[str] = None, finish: Optional[str] = None, thinking: Optional[str] = None):
+            body = {
+                "id": sid,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": ({"content": delta} if delta is not None else {}),
+                    "finish_reason": finish,
+                }],
+            }
+            if thinking:
+                body["thinking"] = thinking
+            return f"data: {json.dumps(body)}\n\n"
+
         yield f"data: {json.dumps({'conversation_id': conv_id})}\n\n"
         queue = asyncio.Queue()
         stop = threading.Event()
@@ -1727,11 +1781,17 @@ def _stream_response(req, user_msg, conv_id, system, workspace_id):
                 evt = await queue.get()
                 if evt.get("type") == "done":
                     break
-                yield f"data: {json.dumps(evt)}\n\n"
+                etype = evt.get("type")
+                content = evt.get("content") or ""
+                if etype == "response" and content:
+                    yield chunk(delta=content)
+                elif etype in ("thinking", "start") and content:
+                    yield chunk(thinking=content)
         finally:
             stop.set()
             if not task.done():
                 task.cancel()
+        yield chunk(finish="stop")
         yield "data: [DONE]\n\n"
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -1774,6 +1834,7 @@ async def chat_stream_full(req: ChatRequest):
             stop.set()
             if not task.done():
                 task.cancel()
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -1819,6 +1880,7 @@ async def chat_auto_stream(req: ChatRequest):
             stop.set()
             if not task.done():
                 task.cancel()
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -2357,8 +2419,12 @@ def import_lora(req: dict):
     name = req.get("name", "")
     if not src:
         raise HTTPException(400, "path required")
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    ap = os.path.abspath(os.path.expanduser(src))
+    if ap != project_root and not ap.startswith(project_root + os.sep):
+        raise HTTPException(403, "import source must be inside the project directory")
     from lora_manager import import_adapter
-    a = import_adapter(src, name)
+    a = import_adapter(ap, name)
     if a is None:
         raise HTTPException(400, "import failed")
     return {"status": "imported", "name": a.name}

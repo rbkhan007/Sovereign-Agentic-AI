@@ -160,6 +160,17 @@ const strings = {
     recentMemories: 'Recent Memories',
     noMemories: 'No memories.',
   },
+  graph: {
+    title: 'Knowledge Graph',
+    subtitle: 'Explore concepts, documents, and connections',
+    nodes: 'Nodes',
+    tags: 'Tags',
+    recent: 'Recent',
+    semantic: 'Semantic',
+    searchPlaceholder: 'Search nodes by title or type...',
+    semanticPlaceholder: 'Semantic search over graph nodes...',
+    noData: 'No graph data. Upload files to a workspace or sync the graph.',
+  },
   settings: {
     title: 'Settings',
     subtitle: 'Configure server, models, and system behavior',
