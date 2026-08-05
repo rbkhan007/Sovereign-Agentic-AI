@@ -19,261 +19,294 @@
 
 ---
 
-Sovereign-Agentic-AI is a local-first agentic stack: a small **Strategist** model
-(`Hy-MT2-1.8B`) writes a plan, an **adaptive harness** ranks the best **Executor**
-model for the job, and (optionally) several executors answer in parallel while the
-strategist **judges** the best reply. Everything runs through `llama.cpp` on CPU/Vulkan
-— no data leaves your machine unless you explicitly opt into a cloud fallback.
+## 📖 About this project
 
-> **Privacy by design.** Chat, memory, the knowledge graph, image generation, vision,
-> AutoML and the self-healing agent all run locally. The only network calls are the
-> optional OpenAI/Claude/Groq/OpenRouter/Gemini fallback and (opt-in) web search.
+**Sovereign-Agentic-AI** is an open-source, local-first agentic AI stack. It turns small
+open-weight models (running on your CPU/GPU through `llama.cpp`) into a **cooperating team**:
+a *Strategist* that reasons about the task and writes a plan, a *router* that picks the
+best *Executor* model for the job, and (optionally) several executors that answer in
+parallel while the strategist *judges* the best reply.
 
----
+It is built for people who want the power of agentic AI **without sending their data to a
+cloud**. Chat, memory, the knowledge graph, image generation, vision, AutoML and the
+self-healing agent all run on your machine. The only network calls are the ones you
+explicitly turn on (an optional OpenAI/Claude/Groq/OpenRouter/Gemini fallback and optional
+web search).
 
-## ✨ Features
-
-| Area | What it does |
-|------|--------------|
-| **Multi-agent pipeline** | Strategist plans → Executor(s) run → Strategist judges (parallel mode). |
-| **Adaptive routing** | Per-`(task, model)` fitness score with epsilon-greedy exploration. |
-| **Parallel execution** | Up to `parallel_max` executors answer concurrently; best is selected by 0–10 judge score. |
-| **Hardware auto-tune** | Detects RAM/VRAM, sets threads + context, runs a live safety monitor. |
-| **Streaming + auto-stream** | SSE token streaming; auto-stream picks stream-vs-batch per request. |
-| **Workspaces** | Isolated chats, file upload + chunk-embedded knowledge search. |
-| **Knowledge graph** | Obsidian-style `[[wiki-links]]`, `#tags`, backlinks, vector + graph hybrid search, recursive-CTE shortest path. |
-| **Agents & skills** | Named personas + reusable skills via API / CLI / MCP, persisted as JSON. |
-| **Web UI** | Next.js + Tailwind glassmorphism dashboard (dark/light), live sparklines, streaming. |
-| **Image generation** | Opt-in Stable Diffusion via `--image-gen` (CPU, RAM-guarded). |
-| **Vision** | Opt-in `moondream2` image understanding via `--vision` (CPU). |
-| **AutoML** | Opt-in Auto-Sklearn training via `--automl` (Linux). |
-| **Self-healing agent** | Diagnoses + proposes fixes for Python; **execution gated** behind `--allow-unsafe-healing`. |
-| **OpenAI-compatible API** | Drop-in `/v1/chat/completions`. |
-| **Cloud fallback** | Optional, sliding-window rate-limited OpenAI/Claude/Groq/OpenRouter/Gemini. |
+> **One-line summary:** *Plan → Route → Execute → Judge → Remember*, all offline by default.
 
 ---
 
-## 🏗️ Architecture
+## 🎯 Why this project exists
+
+Most local LLM tools are single-model chat wrappers. Sovereign-Agentic-AI exists to show
+that a **small, coordinated multi-agent system** can punch above its weight:
+
+- **Reasoning via planning.** A dedicated strategist model plans before answering, which
+  improves quality on code, math and multi-step tasks.
+- **Adaptive routing.** A learned fitness score picks the right executor per task instead
+  of always using the biggest model.
+- **Accountability.** Every answer is judged, scored and recorded, so quality is measurable.
+- **Memory that compounds.** Conversations, documents and wiki-links become a queryable
+  knowledge graph.
+- **Privacy by construction.** No telemetry, no forced cloud, no lock-in.
+
+---
+
+## 🧭 How to use it
+
+**1. Install**
+
+```bash
+pip install -e .          # or: pip install -r requirements.txt
+sovereign-llm             # full mode (Web UI + CLI + API)
+```
+
+**2. Add models.** Drop `.gguf` files into `models/` (expected: `Hy-MT2-1.8B-Q4_K_M.gguf`,
+`MiniCPM5-1B-Agentic-v9-f16.gguf`). Any `.gguf` is auto-discovered.
+
+**3. Run**
+
+```bash
+python run.py                                  # full mode (recommended)
+python run.py --image-gen --vision --automl     # enable opt-in features
+python run.py --db --db-password postgres        # PostgreSQL + pgvector memory
+python run.py --nextjs                          # Next.js dashboard on :3001
+```
+
+**Typical workflows**
+- **Chat (UI):** open the dashboard, pick an agent/skill, stream answers.
+- **Chat (API):** POST `/v1/chat/completions` (OpenAI-compatible) or `/v1/chat/auto-stream`.
+- **Knowledge:** upload `.md` files to a workspace → wiki-links, `#tags` and backlinks
+  become a searchable graph.
+- **Automation:** drive it via `/mcp` JSON-RPC from another tool.
+- **Evaluation:** `python -m arc` / `POST /v1/...` for ARC grid-reasoning accuracy.
+
+---
+
+## 🏗️ Architecture & structural diagrams
+
+### System overview
 
 ```mermaid
 flowchart TD
     U[User / API / CLI] --> R[Router.classify_task]
     R --> O[Orchestrator]
-    O --> P[Strategist: plan<br/>2 candidate plans]
-    O --> M[(pgvector memory<br/>+ knowledge graph)]
+    O --> P[Strategist: plan 2 candidates]
+    O --> M[(pgvector memory + knowledge graph)]
     O --> W[Optional web search]
-    P --> E[Executor(s) generate]
-    E --> J[Strategist judges<br/>0-10 score]
-    J --> H[Harness.record<br/>fitness update]
+    P --> E[Executor generate]
+    E --> J[Strategist judges 0 to 10]
+    J --> H[Harness.record]
     H --> RES[Response + memory store]
     RES --> U
 
     subgraph Models
-        S[Hy-MT2 1.8B · Strategist]
-        X[MiniCPM 1B · Executor]
-        G[Any auto-discovered .gguf]
+      S[Hy-MT2 1.8B Strategist]
+      X[MiniCPM 1B Executor]
+      G[Auto-discovered gguf]
     end
-    O -.uses.-> Models
+    O -.uses.-> S
+    O -.uses.-> X
+    O -.uses.-> G
 ```
 
-**Request lifecycle in one paragraph.** `Router.classify_task()` buckets the prompt
-(`code|math|summarize|translate|tool|creative|general`). The `Orchestrator` retrieves
-relevant memories + knowledge-graph context, asks the Strategist to **plan** (injecting
-the plan as a system hint), then `ModelRouter.select_executors()` ranks executor models
-by harness fitness and load state. In parallel mode the top `parallel_max` executors each
-generate an answer; the Strategist **scores** every candidate 0–10 and the highest wins.
-The chosen `(task, model, ok, latency, tokens)` updates the harness, and the final answer
-is stored back to memory.
+### Request lifecycle (sequence)
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant R as Router
+    participant O as Orchestrator
+    participant S as Strategist (Hy-MT2)
+    participant E as Executor(s)
+    participant H as Harness
+    U->>R: prompt
+    R->>O: classify_task
+    O->>S: plan (2 candidates)
+    S-->>O: best plan
+    O->>E: generate (parallel)
+    E-->>O: candidates
+    O->>S: judge 0 to 10
+    S-->>O: scores
+    O->>H: record(task, model, ok, latency)
+    O-->>U: response + done event
+```
+
+### Knowledge graph structure
+
+```mermaid
+graph TD
+    MD[Markdown upload] --> WL[wiki-link]
+    MD --> TAG[#tag]
+    WL --> N1[Document node]
+    TAG --> N2[Tag node]
+    N1 -->|wikilink| N1
+    N1 -->|backlink| N1
+    N2 -->|tagged| N1
+    N1 -->|hybrid search| V[(pgvector embedding)]
+```
 
 ---
 
 ## ⚙️ How it works (the math)
 
 ### 1. Task classification
-A keyword scan maps the prompt to a bucket:
-
 ```text
-classify_task(text) → one of
+classify_task(text) -> one of
   {code, math, summarize, translate, tool, creative, general}
 ```
 
 ### 2. Planning — two candidate plans
-The Strategist generates **2 candidate plans** (`i ∈ {0,1}`) at slightly different
-temperatures (`0.3 + i·0.1`). Each is scored and the best is kept:
+The strategist generates **2 candidate plans** (`i in {0,1}`) at temperatures
+`0.3 + i*0.1`; the higher-scoring plan wins:
 
 ```text
 score(plan) = len(plan)
-             + 10 · 𝟙{"FINAL_ANSWER" ∈ plan}
-             +  5 · 𝟙{len(plan) > 50}
+             + 10 * 1{"FINAL_ANSWER" in plan}
+             +  5 * 1{len(plan) > 50}
 
-best_plan = argmax_candidates score(plan)
+best_plan = argmax score(plan)
 ```
 
 ### 3. Adaptive harness — fitness score
-Every `(task, model)` earns a fitness from measured **success**, **speed**, and
-**recency**:
+Each `(task, model)` earns fitness from **success**, **speed** and **recency**:
 
 ```text
-success = 1 − errors / attempts
+success = 1 - errors / attempts
+speed   = min(2.0, 1 / avg_latency)      # avg_latency in seconds
+recent  = decay ^ age ,  age = generation - last_gen ,  decay = 0.95
 
-speed   = min(2.0, 1 / avg_latency)        # avg_latency in seconds
-recent  = decay ^ age ,  age = generation − last_gen
-            decay = 0.95 (default)
-
-fitness(task, model) = 60·success + 30·speed + 10·recent
+fitness(task, model) = 60*success + 30*speed + 10*recent
 ```
 
-`ModelRouter.rank_for_task()` sorts executors by `fitness` (capability-matched first,
-then already-loaded first). Exploration uses **epsilon-greedy**:
+Routing is **epsilon-greedy** (`epsilon = 0.15`):
 
 ```text
 choose(task, candidates):
-    with probability ε (ε = 0.15):  return random(candidates)   # explore
-    else:                           return ranked(task, candidates)[0]  # exploit
+    with probability 0.15: return random(candidates)   # explore
+    else:                  return ranked(task, candidates)[0]  # exploit
 ```
 
 ### 4. Parallel execution & judging
-Up to `parallel_max` (default 2) executors answer concurrently
-(`ThreadPoolExecutor`, ≤4 workers). The Strategist judges each 0–10:
+Up to `parallel_max` (default 2) executors answer concurrently; the strategist scores
+each 0–10 and the best wins:
 
 ```text
-judge(Q, A) ∈ [0, 10]          # parsed from the strategist's numeric reply
-final = argmax_{m ∈ candidates} judge(Q, A_m)
+judge(Q, A) in [0, 10]
+final = argmax_{m} judge(Q, A_m)
 ```
 
-When the judge is unavailable, scoring falls back to answer length.
-
 ### 5. Auto-streaming decision
-Per request, the orchestrator streams when appropriate and otherwise batches:
-
 ```text
 should_auto_stream =
     auto_stream_enabled
-    AND max_tokens ≤ auto_stream_max_tokens      # cap = 2048 (default)
+    AND max_tokens <= auto_stream_max_tokens        # cap = 2048
     AND ( use_planning
-        ∨ len(message) > 100
-        ∨ message matches code|creative keywords )
+        OR len(message) > 100
+        OR message matches code|creative keywords )
 
-# Streaming requests are hard-capped:
-max_tokens := min(max_tokens, auto_stream_max_tokens)
+max_tokens := min(max_tokens, auto_stream_max_tokens)   # hard cap
 ```
 
-The SSE protocol emits a terminal event so clients always know when a stream ends:
+SSE emits a terminal `done` event:
 
 ```json
 {"type":"start",   "model":"minicpm-v9"}
-{"type":"thinking","content":"..."}          // optional
-{"type":"response","content":"..."}          // one per token chunk
-{"type":"done",    "model":"minicpm-v9",
- "tokens": 142, "elapsed": 3.1}
+{"type":"thinking","content":"..."}
+{"type":"response","content":"..."}
+{"type":"done",    "model":"minicpm-v9", "tokens":142, "elapsed":3.1}
 ```
 
 ### 6. Throughput
-A 60-second sliding window gives a realistic tokens/sec that ignores the flat cumulative
-average:
-
 ```text
-tokens_per_sec_window = Σ tokens in last 60s  /  60
+tokens_per_sec_window = sum(tokens in last 60s) / 60
 tokens_per_sec        = total_tokens_out / uptime
 ```
 
 ### 7. ARC reasoning accuracy
-Grid-reasoning accuracy over `arc/training.json` (temperature 0, `max_tokens=512`):
-
 ```text
 accuracy = correct / total
-
 _matches(pred, target, exact):
-    if exact:   return parse_grid(pred) == target
-    else:       return (len(pred) ≤ len(target))
-                ∧ (every pred row has len == len(target[0]))
-                ∧ (element-wise pred == target)
+    if exact:  return parse_grid(pred) == target
+    else:      return len(pred) <= len(target)
+                and every pred row has len == len(target[0])
+                and element-wise pred == target
 ```
+
+---
+
+## 🛠️ Capabilities
+
+| Capability | Status | Notes |
+|------------|--------|-------|
+| Multi-agent plan → execute → judge | ✅ | Hy-MT2 plans, executors run, strategist judges |
+| Adaptive per-task model routing | ✅ | Epsilon-greedy harness fitness |
+| Parallel multi-model answers | ✅ | ≤ `parallel_max`, judged 0–10 |
+| Token streaming + auto-stream | ✅ | SSE, per-request stream/batch |
+| Workspaces + file knowledge | ✅ | Chunk-embedded, per-workspace search |
+| Knowledge graph (wiki-links, tags, backlinks) | ✅ | pgvector + recursive-CTE shortest path |
+| Agents & skills (API/CLI/MCP) | ✅ | Runtime CRUD, JSON-persisted |
+| Next.js glassmorphism dashboard | ✅ | Dark/light, live sparklines |
+| Image generation (Stable Diffusion) | ✅ opt-in | CPU, RAM-guarded, 256–512 px |
+| Vision (moondream2) | ✅ opt-in | CPU, resource-guarded |
+| AutoML (auto-sklearn) | ✅ opt-in | Linux-only |
+| Self-healing agent | ⚠️ gated | Diagnosis always; **execution** needs `--allow-unsafe-healing` |
+| OpenAI-compatible API | ✅ | Drop-in `/v1/chat/completions` |
+| Cloud fallback | ✅ opt-in | Rate-limited OpenAI/Claude/Groq/OpenRouter/Gemini |
 
 ---
 
 ## 📤 Outputs
 
-What the system actually produces:
-
 | Output | Shape | Notes |
 |--------|-------|-------|
-| **Chat completion** | OpenAI-style JSON | `choices[0].message.content` (+ optional `thinking`). |
-| **Streaming events** | SSE `start → thinking? → response* → done` | Token-by-token; `done` carries `tokens` + `elapsed`. |
-| **Plan / thinking** | text | Strategist plan, surfaced in UI and SSE. |
-| **Ranked candidates** | dict | In parallel mode: each model's answer + judge score. |
-| **Memory** | pgvector rows | Q/A pairs + graph nodes/edges stored for later retrieval. |
-| **Knowledge graph** | nodes/edges/tags | Wiki-links, `#tags`, backlinks, shortest path. |
-| **Images** | `generated/*.png` | From `--image-gen` (256–512 px, 8–40 steps). |
-| **Vision** | description text | From `--vision` (moondream2). |
-| **AutoML model** | `.pkl` | From `--automl` training. |
-| **Metrics** | JSON | Per-model `success_rate`, `avg_latency`, `tokens_per_sec_window`. |
-| **Harness stats** | JSON | Per-`(task,model)` fitness, reset/adjust/export. |
+| Chat completion | OpenAI-style JSON | `choices[0].message.content` (+ optional `thinking`) |
+| Streaming events | SSE `start → thinking? → response* → done` | `done` carries `tokens` + `elapsed` |
+| Plan / thinking | text | Surfaced in UI and SSE |
+| Ranked candidates | dict | Each model's answer + judge score (parallel mode) |
+| Memory | pgvector rows | Q/A + graph nodes/edges |
+| Knowledge graph | nodes/edges/tags | Wiki-links, `#tags`, backlinks, shortest path |
+| Images | `generated/*.png` | From `--image-gen` |
+| Vision | description text | From `--vision` |
+| AutoML model | `.pkl` | From `--automl` |
+| Metrics / Harness stats | JSON | `success_rate`, `avg_latency`, `tokens_per_sec_window`, fitness |
 
 ---
 
-## 🚀 Quick start
+## 📊 SWOT analysis
 
-### Option A — pip-installable package (recommended)
-
-```bash
-pip install -e .                    # backend + 4 CLI entry points
-sovereign-llm                       # full mode: Web UI + CLI + API
-```
-
-| Command | Mode |
+| | |
 |---|---|
-| `sovereign-llm` | Full mode: Web UI + CLI + API |
-| `sovereign-llm-web` | Web UI + API only |
-| `sovereign-llm-cli` | Terminal CLI only |
-| `sovereign-llm-api` | API server only |
-
-### Option B — run from source
-
-```bash
-python -m venv venv && venv\Scripts\activate
-pip install -r requirements.txt
-# GPU (Vulkan): set CMAKE_ARGS="-DGGML_VULKAN=on" && pip install --force-reinstall llama-cpp-python --no-cache-dir
-python run.py                    # full mode (recommended)
-```
-
-Place `.gguf` files in `models/` (expected: `Hy-MT2-1.8B-Q4_K_M.gguf`,
-`MiniCPM5-1B-Agentic-v9-f16.gguf`). Any `.gguf` dropped there is auto-discovered.
-
-### Common flags
-
-```bash
-python run.py --port 8080 --api-token secret
-python run.py --image-gen --vision --automl
-python run.py --healing --allow-unsafe-healing   # healing EXECUTES code only with this flag
-python run.py --db --db-password postgres        # PostgreSQL + pgvector memory
-python run.py --nextjs                           # Next.js dev server on :3001
-```
+| **Strengths** | 100% local/private; multi-agent planning+judging; adaptive routing; knowledge graph; 703 automated tests; clean static audit; MIT + transparent. |
+| **Weaknesses** | Small models → weaker than frontier LLMs; runs best on modest hardware (slow on CPU); vision/AutoML/image-gen are resource-heavy; some features Linux-only (AutoML). |
+| **Opportunities** | Drop-in OpenAI-compatible API; MCP integration; workspace knowledge; extensible agents/skills; easy to add new GGUF models; ideal for on-prem / air-gapped deployments. |
+| **Threats** | Upstream `llama.cpp`/transformers API drift; large-model competition; hardware fragmentation (Vulkan/ROCm/CUDA); supply-chain risk in optional deps. |
 
 ---
 
-## 🔌 API (condensed)
+## 🤝 Why trust an indie developer?
 
-All routes are under `http://localhost:{port}`. Full reference in
-[AGENTS.md](AGENTS.md).
+Legitimate question. Trust here is built on **verifiability, not authority**:
 
-| Method | Path | Purpose |
-|:--|:-----|:--|
-| POST | `/v1/chat/completions` | OpenAI-compatible chat |
-| POST | `/v1/chat/stream` · `/v1/chat/auto-stream` | Token streaming / adaptive streaming |
-| GET | `/v1/models` · `/v1/models/load` · `/v1/models/unload` | Model lifecycle |
-| POST | `/v1/memory/search` · `/v1/memory/store` | pgvector memory |
-| GET/POST | `/v1/agents` · `/v1/skills` | Personas + skills CRUD |
-| POST | `/v1/loras/train` · `/v1/images/generate` · `/v1/vision/analyze` | LoRA / image / vision |
-| GET | `/v1/graph/hybrid` · `/v1/graph/path` | Graph search + shortest path |
-| GET | `/v1/router/stats` · `/v1/metrics` · `/v1/hardware` | Telemetry |
-| GET/POST | `/mcp` | MCP tool discovery + JSON-RPC |
+- **Open source under MIT** — every line is inspectable; you can audit, fork and self-host.
+- **Reproducible** — `requirements.txt` / `pip install -e .` gives a deterministic local build.
+- **Tested** — **703 offline tests, 0 failures**, plus a full static audit (mypy, pyflakes,
+  bandit, vulture, pydocstyle, ESLint) that is clean.
+- **Transparent about limits** — known, non-critical issues are tracked publicly in
+  [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md); nothing is hidden.
+- **Privacy by construction** — no telemetry; data stays on your device unless you opt in.
+- **Security-hardened** — the self-healing code-execution is gated, uploaded files are
+  served safely, and graph referential integrity is enforced (see below).
+- **Documented** — architecture, math, API and safety are all written down
+  ([AGENTS.md](AGENTS.md), [AUDIT_REPORT.md](AUDIT_REPORT.md)).
+
+> If you can read Python, you can verify every claim on this page yourself. That is the
+> point of local-first software.
 
 ---
 
 ## 🔐 Security & hardening (v1.0.0)
-
-These were reviewed and fixed before release:
 
 - **Self-healing RCE gate** — `heal()` refuses to run caller-supplied Python unless
   `--allow-unsafe-healing` is passed. `--healing` alone only enables diagnosis.
@@ -281,20 +314,70 @@ These were reviewed and fixed before release:
   nosniff` and `Content-Disposition: attachment` for inline-dangerous types (`.html`,
   `.svg`, `.xml`, `.js`).
 - **Graph referential integrity** — `#tags` are materialized as real graph nodes
-  (`node_type='tag'`) and linked node→node, so tag edges no longer corrupt the
-  `edges` FK.
+  (`node_type='tag'`) and linked node→node, so tag edges no longer corrupt the `edges` FK.
 - **Vision API** — switched to the correct `moondream2` `answer_question` pipeline.
 
-> ⚠️ Keep `--allow-unsafe-healing` off on any machine reachable from untrusted
-> networks. It executes arbitrary Python with the server's privileges.
+---
+
+## ⚠️ Limitations & liability
+
+This software is provided **"AS IS", without warranty of any kind** (see
+[LICENSE](LICENSE)). In addition:
+
+- It is **experimental**. Model output can be wrong, unsafe, or biased; always verify
+  important results.
+- Optional features — vision, image generation, AutoML, and especially the **self-healing
+  agent** — execute model/code on your machine. The healing agent can run **arbitrary
+  Python**; only enable `--allow-unsafe-healing` on a trusted, local machine, never on a
+  host reachable from untrusted networks.
+- The authors are **not liable** for any damages, data loss, or harm arising from use,
+  misuse, or inability to use the software.
+- Performance depends entirely on your hardware; CPU-only inference is slow by design.
+
+---
+
+## ©️ Copyright & license
+
+- **Copyright (c) 2025–2026 Rakibul Hasan (Rhasan_Indie_dev).**
+- Licensed under the **MIT License** — you may use, copy, modify, merge, publish,
+  distribute, sublicense, and/or sell copies, provided the copyright notice and permission
+  notice are included. See [LICENSE](LICENSE).
+- **Attribution:** keep the copyright/license notice in source distributions.
+- **Trademarks:** "Sovereign-Agentic-AI" is the project name; third-party model and tool
+  names (llama.cpp, moondream2, auto-sklearn, Next.js, etc.) belong to their owners.
+
+---
+
+## ❓ FAQ
+
+**Q: Can I trust an indie dev's AI with my data?**
+A: The app is local-first — no telemetry, and nothing leaves your machine unless you
+explicitly enable a cloud fallback or web search. You can read the entire codebase; the
+703-test suite and public audit let you verify behaviour yourself.
+
+**Q: Is it free / can I use it commercially?**
+A: Yes. MIT licensed — free for personal and commercial use, with attribution.
+
+**Q: What if there are bugs?**
+A: 703 automated tests + a clean static audit cover the core; remaining non-critical
+items are listed transparently in `KNOWN_ISSUES.md`.
+
+**Q: Who is liable if the healing agent executes bad code?**
+A: The software is provided "AS IS" with no warranty (see Limitations & liability). Keep
+`--allow-unsafe-healing` off unless you are on a trusted local machine and understand the
+risk.
+
+**Q: How is this different from Ollama / LM Studio / LocalAI?**
+A: Multi-agent planning **and** judging, an adaptive per-task harness, a knowledge graph,
+and parallel multi-model execution — none of which those tools provide.
 
 ---
 
 ## 🧪 Testing & quality
 
 ```bash
-python test_all.py          # 703 offline tests, 0 failures (no model/DB loads)
-python test_system.py 8070   # live integration tests (running server)
+python test_all.py          # 703 offline tests, 0 failures
+python test_system.py 8070   # live integration tests
 python test_load.py --port 8070
 python run_deep_audit.py     # mypy + pyflakes + bandit + vulture + pydocstyle + ESLint
 ```
@@ -306,8 +389,8 @@ python run_deep_audit.py     # mypy + pyflakes + bandit + vulture + pydocstyle +
 | TypeScript build | pass (13 routes) |
 | ESLint (frontend) | pass |
 
-Non-critical, deferred items are tracked in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md); the
-full audit narrative is in [`AUDIT_REPORT.md`](AUDIT_REPORT.md).
+Non-critical deferred items: [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md). Full audit:
+[`AUDIT_REPORT.md`](AUDIT_REPORT.md).
 
 ---
 
@@ -343,4 +426,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-<p align="center"><sub>Built by <a href="https://rhasan-dev-bd-com.vercel.app/">Rakibul Hasan</a> (Rhasan_Indie_dev).</sub></p>
+<p align="center"><sub>Built by <a href="https://rhasan-dev-bd-com.vercel.app/">Rakibul Hasan</a> (Rhasan_Indie_dev). Local. Fast. Private.</sub></p>
