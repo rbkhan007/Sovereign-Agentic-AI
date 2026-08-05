@@ -3,12 +3,13 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Activity, MessageSquare, FolderOpen, Database, Cpu, Wrench, Shield, Settings, HelpCircle, Sun, Moon, ChevronLeft, ChevronRight, Wifi, WifiOff, X, GitBranch, Menu, type LucideIcon } from 'lucide-react';
+import { Activity, MessageSquare, FolderOpen, Database, Cpu, Wrench, Shield, Settings, HelpCircle, Sun, Moon, ChevronLeft, ChevronRight, Wifi, WifiOff, X, GitBranch, Menu, Bot, type LucideIcon } from 'lucide-react';
 import { useTheme } from '@/components/ThemeProvider';
 import { useSidebar } from '@/components/SidebarProvider';
-import { fetchJSON } from '@/lib/api';
+import { fetchJSON, toArray } from '@/lib/api';
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
+type AgentItem = { name: string; role?: string };
 
 const navGroups: { label: string; items: NavItem[] }[] = [
   {
@@ -43,6 +44,7 @@ const footerItems = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [activeAgent, setActiveAgent] = useState<string | null>(null);
   const { theme, toggle } = useTheme();
   const { open: mobileOpen, setOpen: setMobileOpen } = useSidebar();
   const [collapsed, setCollapsed] = useState(() => {
@@ -50,10 +52,24 @@ export default function Sidebar() {
     try { return localStorage.getItem('sidebar_collapsed') === 'true'; } catch { return false; }
   });
   const [online, setOnline] = useState<boolean | null>(null);
+  const [agents, setAgents] = useState<AgentItem[]>([]);
 
   useEffect(() => {
     try { localStorage.setItem('sidebar_collapsed', String(collapsed)); } catch { /* ignore */ }
   }, [collapsed]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setActiveAgent(new URLSearchParams(window.location.search).get('agent'));
+  }, [pathname]);
+
+  useEffect(() => {
+    let mounted = true;
+    fetchJSON('/v1/agents')
+      .then(d => { if (mounted) setAgents(toArray<AgentItem>(d).filter(a => a && a.name)); })
+      .catch(() => { /* agents are optional in the sidebar */ });
+    return () => { mounted = false; };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -121,6 +137,44 @@ export default function Sidebar() {
             </div>
           </div>
         ))}
+
+        {agents.length > 0 && (
+          <div className="mb-4">
+            {!collapsed && (
+              <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-muted">Agents</p>
+            )}
+            <div className="space-y-0.5">
+              {agents.map(agent => {
+                const isActive = pathname === '/chat' && activeAgent === agent.name;
+                const Icon = Bot;
+                return (
+                  <Link
+                    key={agent.name}
+                    href={`/chat?agent=${encodeURIComponent(agent.name)}`}
+                    onClick={() => setMobileOpen(false)}
+                    className={`relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                      isActive
+                        ? 'text-accent bg-accent-soft border border-accent/20'
+                        : 'text-text-secondary hover:text-text-primary hover:bg-bg-tertiary border border-transparent'
+                    }`}
+                    title={collapsed ? agent.name : undefined}
+                  >
+                    {isActive && !collapsed && (
+                      <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full bg-accent" />
+                    )}
+                    <Icon size={18} className={`shrink-0 ${isActive ? 'text-accent' : 'text-accent-2'}`} />
+                    {!collapsed && (
+                      <span className="flex flex-col min-w-0">
+                        <span className="truncate capitalize">{agent.name}</span>
+                        {agent.role && <span className="text-[10px] text-text-muted truncate">{agent.role}</span>}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </nav>
 
       <div className="p-3 border-t border-border space-y-1">

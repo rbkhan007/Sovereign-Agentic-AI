@@ -811,7 +811,8 @@ def retrieve_similar(query: str, limit: int = 5, agent_filter: Optional[str] = N
                 )
             elif agent_filter:
                 cur.execute(
-                    "SELECT thought, (embedding <=> %s::vector) AS dist FROM agent_memory WHERE agent_name = %s ORDER BY dist LIMIT %s",
+                    "SELECT thought, (embedding <=> %s::vector) AS dist FROM agent_memory "
+                    "WHERE agent_name = %s AND workspace_id = 'default' ORDER BY dist LIMIT %s",
                     (str(vec), agent_filter, limit),
                 )
             elif workspace_id:
@@ -821,7 +822,8 @@ def retrieve_similar(query: str, limit: int = 5, agent_filter: Optional[str] = N
                 )
             else:
                 cur.execute(
-                    "SELECT thought, (embedding <=> %s::vector) AS dist FROM agent_memory ORDER BY dist LIMIT %s",
+                    "SELECT thought, (embedding <=> %s::vector) AS dist FROM agent_memory "
+                    "WHERE workspace_id = 'default' ORDER BY dist LIMIT %s",
                     (str(vec), limit),
                 )
             rows = cur.fetchall()
@@ -851,11 +853,14 @@ def count_memories(agent: Optional[str] = None, workspace_id: Optional[str] = No
                 cur.execute("SELECT COUNT(*) FROM agent_memory WHERE agent_name = %s AND workspace_id = %s",
                             (agent, workspace_id))
             elif agent:
-                cur.execute("SELECT COUNT(*) FROM agent_memory WHERE agent_name = %s", (agent,))
+                cur.execute(
+                    "SELECT COUNT(*) FROM agent_memory WHERE agent_name = %s AND workspace_id = 'default'",
+                    (agent,),
+                )
             elif workspace_id:
                 cur.execute("SELECT COUNT(*) FROM agent_memory WHERE workspace_id = %s", (workspace_id,))
             else:
-                cur.execute("SELECT COUNT(*) FROM agent_memory")
+                cur.execute("SELECT COUNT(*) FROM agent_memory WHERE workspace_id = 'default'")
             return cur.fetchone()[0]
     except Exception as e:
         logger.warning(f"Count failed: {e}")
@@ -883,7 +888,8 @@ def recent_memories(limit: int = 20, agent: Optional[str] = None,
             elif agent:
                 cur.execute(
                     "SELECT id, agent_name, thought, tokens, created_at, metadata, workspace_id "
-                    "FROM agent_memory WHERE agent_name = %s ORDER BY created_at DESC LIMIT %s",
+                    "FROM agent_memory WHERE agent_name = %s AND workspace_id = 'default' "
+                    "ORDER BY created_at DESC LIMIT %s",
                     (agent, limit),
                 )
             elif workspace_id:
@@ -895,7 +901,7 @@ def recent_memories(limit: int = 20, agent: Optional[str] = None,
             else:
                 cur.execute(
                     "SELECT id, agent_name, thought, tokens, created_at, metadata, workspace_id "
-                    "FROM agent_memory ORDER BY created_at DESC LIMIT %s",
+                    "FROM agent_memory WHERE workspace_id = 'default' ORDER BY created_at DESC LIMIT %s",
                     (limit,),
                 )
             rows = cur.fetchall()
@@ -948,7 +954,7 @@ def search_memories(query: str, limit: int = 5, agent: Optional[str] = None,
             elif agent:
                 cur.execute(
                     "SELECT id, agent_name, thought, tokens, created_at, (embedding <=> %s::vector) AS dist "
-                    "FROM agent_memory WHERE agent_name = %s ORDER BY dist LIMIT %s",
+                    "FROM agent_memory WHERE agent_name = %s AND workspace_id = 'default' ORDER BY dist LIMIT %s",
                     (str(vec), agent, limit),
                 )
             elif workspace_id:
@@ -960,7 +966,7 @@ def search_memories(query: str, limit: int = 5, agent: Optional[str] = None,
             else:
                 cur.execute(
                     "SELECT id, agent_name, thought, tokens, created_at, (embedding <=> %s::vector) AS dist "
-                    "FROM agent_memory ORDER BY dist LIMIT %s",
+                    "FROM agent_memory WHERE workspace_id = 'default' ORDER BY dist LIMIT %s",
                     (str(vec), limit),
                 )
             rows = cur.fetchall()
@@ -1078,8 +1084,7 @@ def db_stats() -> Dict[str, Any]:
                 if r and r[0]:
                     typ, typmod = r[1], r[0]
                     if typ and typ.lower().startswith("vector"):
-                        # pgvector stores atttypmod = dim + 4
-                        info["vector_dim"] = max(1, typmod - 4)
+                        info["vector_dim"] = max(1, typmod)
             except Exception:
                 pass
     except Exception as e:
@@ -2285,6 +2290,7 @@ def store_file_chunks(workspace_id: str, name: str, chunks: List[str]) -> int:
             entries.append({
                 "agent": _ws_agent_name(workspace_id),
                 "thought": chunk,
+                "workspace_id": workspace_id,
                 "metadata": {"kind": "file", "file": name, "chunk": i, "workspace_id": workspace_id},
             })
         store_batch(entries)
@@ -2296,7 +2302,8 @@ def store_file_chunks(workspace_id: str, name: str, chunks: List[str]) -> int:
 
 def search_workspace_knowledge(workspace_id: str, query: str, limit: int = 5,
                                min_score: float = 0.0) -> List[Dict[str, Any]]:
-    return search_memories(query, limit=limit, agent=_ws_agent_name(workspace_id), min_score=min_score)
+    return search_memories(query, limit=limit, agent=_ws_agent_name(workspace_id),
+                           min_score=min_score, workspace_id=workspace_id)
 
 
 def get_file_content(workspace_id: str, name: str) -> Optional[str]:

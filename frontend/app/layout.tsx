@@ -26,10 +26,13 @@ const themeScript = `
 (function() {
   try {
     var t = localStorage.getItem('theme');
-    if (t === 'light') {
-      document.documentElement.classList.add('light');
-      document.documentElement.classList.remove('dark');
+    if (t !== 'light' && t !== 'dark') {
+      t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     }
+    var el = document.documentElement;
+    el.classList.remove('light', 'dark');
+    el.classList.add(t);
+    if (t === 'dark') { localStorage.setItem('theme', 'dark'); }
   } catch(e) {}
 })()
 `;

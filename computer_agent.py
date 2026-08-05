@@ -439,11 +439,83 @@ def _tool_process_kill(pid: int) -> ToolResult:
         return ToolResult(False, f"Kill error: {e}")
 
 
+def _tool_gui_move(x: int, y: int) -> ToolResult:
+    try:
+        from gui_automation import move_mouse
+        return ToolResult(True, f"Mouse moved to {move_mouse(int(x), int(y))}")
+    except Exception as e:
+        return ToolResult(False, f"Mouse move error: {e}")
+
+
+def _tool_gui_click(button: str = "left", x: int = 0, y: int = 0, clicks: int = 1,
+                    use_position: bool = False) -> ToolResult:
+    try:
+        from gui_automation import click
+        if use_position:
+            return ToolResult(True, click(button, None, None, clicks))
+        return ToolResult(True, click(button, int(x), int(y), clicks))
+    except Exception as e:
+        return ToolResult(False, f"Click error: {e}")
+
+
+def _tool_gui_drag(start_x: int, start_y: int, end_x: int, end_y: int) -> ToolResult:
+    try:
+        from gui_automation import drag
+        return ToolResult(True, drag(int(start_x), int(start_y), int(end_x), int(end_y)))
+    except Exception as e:
+        return ToolResult(False, f"Drag error: {e}")
+
+
+def _tool_gui_scroll(lines: int = 1) -> ToolResult:
+    try:
+        from gui_automation import scroll
+        return ToolResult(True, scroll(int(lines)))
+    except Exception as e:
+        return ToolResult(False, f"Scroll error: {e}")
+
+
+def _tool_gui_type(text: str) -> ToolResult:
+    try:
+        from gui_automation import type_text
+        return ToolResult(True, type_text(text))
+    except Exception as e:
+        return ToolResult(False, f"Keyboard type error: {e}")
+
+
+def _tool_gui_press(keys: str) -> ToolResult:
+    try:
+        from gui_automation import press
+        return ToolResult(True, press(keys))
+    except Exception as e:
+        return ToolResult(False, f"Keyboard press error: {e}")
+
+
+def _tool_gui_cursor() -> ToolResult:
+    try:
+        from gui_automation import cursor_position, screen_size
+        pos = cursor_position()
+        size = screen_size()
+        return ToolResult(True, f"Cursor: {pos}, Screen: {size}")
+    except Exception as e:
+        return ToolResult(False, f"Cursor error: {e}")
+
+
+def _tool_gui_screenshot() -> ToolResult:
+    try:
+        from gui_automation import screenshot
+        return ToolResult(True, screenshot())
+    except Exception as e:
+        return ToolResult(False, f"Screenshot error: {e}")
+
+
 class ToolRegistry:
-    def __init__(self, sandbox: bool = False):
+    def __init__(self, sandbox: bool = False, allow_gui: bool = False):
         self.tools: Dict[str, AgentTool] = {}
         self.sandbox = sandbox
+        self.allow_gui = allow_gui
         self._register_builtins()
+        if allow_gui:
+            self._register_gui_tools()
 
     def _register_builtins(self):
         self.register(AgentTool(
@@ -597,6 +669,109 @@ class ToolRegistry:
     def register(self, tool: AgentTool):
         self.tools[tool.name] = tool
 
+    def _register_gui_tools(self):
+        """Human-interface tools: mouse + keyboard control (like a real person)."""
+        self.register(AgentTool(
+            name="mouse_move",
+            description="Move the mouse cursor to absolute screen coordinates (x, y).",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer", "description": "Absolute X coordinate"},
+                    "y": {"type": "integer", "description": "Absolute Y coordinate"},
+                },
+                "required": ["x", "y"],
+            },
+            execute=_tool_gui_move,
+            dangerous=True,
+        ))
+        self.register(AgentTool(
+            name="mouse_click",
+            description="Click the mouse at (x, y). Use use_position=true to click at the current cursor position.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "button": {"type": "string", "description": "left, right, or middle (default left)"},
+                    "x": {"type": "integer", "description": "X coordinate"},
+                    "y": {"type": "integer", "description": "Y coordinate"},
+                    "clicks": {"type": "integer", "description": "Number of clicks (1=single, 2=double)"},
+                    "use_position": {"type": "boolean", "description": "Click at current cursor position"},
+                },
+            },
+            execute=_tool_gui_click,
+            dangerous=True,
+        ))
+        self.register(AgentTool(
+            name="mouse_drag",
+            description="Press the mouse at (start_x, start_y), drag to (end_x, end_y),"
+                        " then release. Used for highlighting text or moving windows.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "start_x": {"type": "integer", "description": "Start X"},
+                    "start_y": {"type": "integer", "description": "Start Y"},
+                    "end_x": {"type": "integer", "description": "End X"},
+                    "end_y": {"type": "integer", "description": "End Y"},
+                },
+                "required": ["start_x", "start_y", "end_x", "end_y"],
+            },
+            execute=_tool_gui_drag,
+            dangerous=True,
+        ))
+        self.register(AgentTool(
+            name="mouse_scroll",
+            description="Scroll the mouse wheel. Positive = scroll up, negative = scroll down.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "lines": {"type": "integer", "description": "Notches to scroll (e.g. 3 or -3)"},
+                },
+            },
+            execute=_tool_gui_scroll,
+            dangerous=True,
+        ))
+        self.register(AgentTool(
+            name="keyboard_type",
+            description="Type text as if a person typed it on the keyboard (simulates keystrokes).",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Text to type"},
+                },
+                "required": ["text"],
+            },
+            execute=_tool_gui_type,
+            dangerous=True,
+        ))
+        self.register(AgentTool(
+            name="keyboard_press",
+            description="Press keys or a key combo like 'ctrl+c', 'alt+tab', 'enter', 'win+d'.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "keys": {"type": "string", "description": "Key or '+' joined combo, e.g. ctrl+c"},
+                },
+                "required": ["keys"],
+            },
+            execute=_tool_gui_press,
+            dangerous=True,
+        ))
+        self.register(AgentTool(
+            name="cursor_position",
+            description="Get the current mouse cursor position and screen size.",
+            parameters={"type": "object", "properties": {}},
+            execute=_tool_gui_cursor,
+            dangerous=True,
+        ))
+        self.register(AgentTool(
+            name="screenshot",
+            description="Take a screenshot of the whole screen and save it under"
+                        " generated/gui_screenshots/. Returns the path.",
+            parameters={"type": "object", "properties": {}},
+            execute=_tool_gui_screenshot,
+            dangerous=True,
+        ))
+
     def get(self, name: str) -> Optional[AgentTool]:
         return self.tools.get(name)
 
@@ -728,11 +903,13 @@ class AgentResult:
 
 class ComputerAgent:
     def __init__(self, model_manager, orchestrator,
-                 sandbox: bool = False, max_steps: int = _MAX_STEPS):
+                 sandbox: bool = False, max_steps: int = _MAX_STEPS,
+                 allow_gui: bool = False):
         self.model_manager = model_manager
         self.orchestrator = orchestrator
-        self.registry = ToolRegistry(sandbox=sandbox)
+        self.registry = ToolRegistry(sandbox=sandbox, allow_gui=allow_gui)
         self.sandbox = sandbox
+        self.allow_gui = allow_gui
         self.max_steps = max_steps
         self._cancelled = False
 
@@ -930,6 +1107,7 @@ class ComputerAgent:
 
 
 def create_computer_agent(model_manager, orchestrator, sandbox: bool = False,
-                          max_steps: int = _MAX_STEPS) -> ComputerAgent:
+                          max_steps: int = _MAX_STEPS,
+                          allow_gui: bool = False) -> ComputerAgent:
     return ComputerAgent(model_manager, orchestrator, sandbox=sandbox,
-                         max_steps=max_steps)
+                         max_steps=max_steps, allow_gui=allow_gui)

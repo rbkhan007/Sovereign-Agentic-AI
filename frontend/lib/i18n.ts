@@ -214,7 +214,7 @@ const strings = {
     height: 'Height',
     steps: 'Steps',
     vision: 'Vision',
-    visionHint: 'Analyze an uploaded image with the local vision model (moondream2).',
+    visionHint: 'Analyze an uploaded image with the local vision model (Gemma 3).',
     analyzing: 'Analyzing...',
     visionDisabled: 'Vision is disabled — enable it with --vision (run.py) or POST /v1/config vision.enabled=true.',
     noAgents: 'No agents found',

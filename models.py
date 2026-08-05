@@ -237,7 +237,7 @@ class ModelManager:
         if not mc:
             raise ValueError(f"Model '{name}' not found. Available: {list(self.configs.keys())}")
         logger.info(f"Loading {mc.name} ({mc.role}) from {mc.path}")
-        logger.info(f"  threads={mc.n_threads}, gpu_layers={mc.n_gpu_layers}, ctx={mc.n_ctx}")
+        logger.info(f"  threads={mc.n_threads}, batch={mc.n_batch}, gpu_layers={mc.n_gpu_layers}, ctx={mc.n_ctx}")
         sys.stdout.flush()
         start = time.time()
         try:
@@ -257,6 +257,8 @@ class ModelManager:
                 model_path=mc.path,
                 n_ctx=mc.n_ctx,
                 n_threads=mc.n_threads,
+                n_batch=mc.n_batch,
+                n_ubatch=mc.n_ubatch,
                 n_gpu_layers=mc.n_gpu_layers,
                 verbose=False,
                 use_mlock=True,

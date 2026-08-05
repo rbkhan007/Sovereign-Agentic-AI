@@ -1,19 +1,21 @@
 ﻿# Sovereign-Agentic-AI — Local Multi-Agent System
 
 **Backend**: llama.cpp via `llama-cpp-python` (Vulkan on AMD GPUs)
-**Models**: Hy-MT2-1.8B (Strategist) + MiniCPM-1B (Executor/ToolExecutor)
+**Models**: Hy-MT2-1.8B (Strategist) + Gemma 4 E4B / Qwen2.5-Omni 3B / Mythos-nano (Executors)
 **Memory**: Optional PostgreSQL + pgvector (semantic memory)
 
 ---
 
 ## System Overview
 
-A fully local, privacy-first multi-agent chat system. Two small specialized models cooperate:
+A fully local, privacy-first multi-agent chat system. Small specialized models cooperate:
 
 | Agent (Model) | Role | Typical Use |
 | :--- | :--- | :--- |
 | **Hy-MT2** 1.8B Q4_K_M | Strategist / Planner | Decomposes the user request and produces a short plan (2 candidate plans, best selected) |
-| **MiniCPM** 1B (v9 / tooluse) | Executor / ToolExecutor | Produces the final answer from the plan |
+| **Gemma 4 E4B** Q2_K_XL | Executor | Strong general answers, code, math, summarization, creative |
+| **Qwen2.5-Omni** 3B Q4_K_M | Executor | General answers, code, math, summarization, analysis |
+| **Mythos-nano** Q5_K_M | Executor | Fast lightweight answers for everyday chat |
 
 The flow is **single-pass**: plan (if enabled) → execute. There is no iterative agentic loop and no automatic error-retry.
 
@@ -28,7 +30,7 @@ The flow is **single-pass**: plan (if enabled) → execute. There is no iterativ
 
 ### Verified GPU (this project)
 - AMD Radeon RX 5600 XT (6 GB VRAM) via the Vulkan backend (`ggml-vulkan.dll` built from source).
-- Hy-MT2 1.8B Q4_K_M ≈ 1.1 GB VRAM; MiniCPM 1B F16 ≈ 2 GB. Typical usage ~3–4 GB (well within 6 GB budget).
+- Hy-MT2 1.8B Q4_K_M ≈ 1.1 GB VRAM; Gemma 4 E4B Q2_K_XL ≈ 3 GB; Qwen2.5-Omni 3B Q4_K_M ≈ 2.5 GB; Mythos-nano Q5_K_M ≈ 2.7 GB. Models are loaded one at a time and LRU-evicted under the 6 GB budget.
 
 ---
 
@@ -54,8 +56,9 @@ Place your `.gguf` files in the `models/` directory. Expected filenames are defi
 | File | Name | Role |
 | :--- | :--- | :--- |
 | `Hy-MT2-1.8B-Q4_K_M.gguf` | `hy-mt2` | Strategist |
-| `MiniCPM5-1B-Agentic-v9-f16.gguf` | `minicpm-v9` | Executor |
-| `minicpm5-1b-agentic-tooluse.F16.gguf` | `minicpm-tooluse` | ToolExecutor |
+| `gemma-4-E4B-it-qat-UD-Q2_K_XL.gguf` | `gemma-4-e4b` | Executor |
+| `Qwen2.5-Omni-3B-Q4_K_M.gguf` | `qwen2.5-omni-3b` | Executor |
+| `mythos-nano-Q5_K_M.gguf` | `mythos-nano` | Executor |
 
 Any other `.gguf` dropped into `models/` is auto-discovered and registered as an `Executor` (general capability). Use `--add-model PATH --add-model-name NAME --add-model-role Executor` to register a file from outside `models/`. The web UI defaults to the first *executor*-role model. Models are loaded lazily on first use.
 
@@ -239,7 +242,7 @@ Treatment: ...
 3. If planning is enabled and `hy-mt2` is present, generate **2 candidate plans** (temp 0.3/0.4, ≤256 tokens) and select the best by length + small random tiebreak.
 4. Build a ChatML prompt (conversation + plan as a system message).
 5. **Generate the answer**:
-   - *Parallel mode (non-stream, default on)*: up to `parallel_max` executor models present on disk (`minicpm-v9`, `minicpm-tooluse`, …) answer the same prompt **concurrently in a thread pool**; Hy-MT2 then judges each candidate on a 0–10 scale and the best wins. Set `"parallel": false` on the request (or `--no-parallel`) to disable.
+   - *Parallel mode (non-stream, default on)*: up to `parallel_max` executor models present on disk (`gemma-4-e4b`, `qwen2.5-omni-3b`, `mythos-nano`, …) answer the same prompt **concurrently in a thread pool**; Hy-MT2 then judges each candidate on a 0–10 scale and the best wins. Set `"parallel": false` on the request (or `--no-parallel`) to disable.
    - *Streaming mode*: tokens stream live from the primary executor via `/v1/chat/stream`.
 6. Append the assistant turn to the conversation and (optionally) store `Q: … / A: …` into pgvector memory.
 
@@ -439,7 +442,7 @@ Build: `cd frontend && npm run build` then `python run.py --nextjs` (API on :807
 
 ## License Notes
 
-- **Hy-MT2 / MiniCPM**: open-weights, license per their respective HuggingFace repositories.
+- **Hy-MT2 / Gemma 4 / Qwen2.5-Omni / Mythos-nano**: open-weights, license per their respective HuggingFace repositories.
 - **llama.cpp**: MIT. **pgvector**: PostgreSQL License. **This app code**: provided as-is for the project.
 
 ---

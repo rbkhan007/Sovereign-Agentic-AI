@@ -222,6 +222,38 @@ input, textarea, select {
   box-shadow: var(--shadow-sm), 0 0 0 1px rgba(15, 16, 25, 0.03);
 }
 
+/* ── ASCII logo panel ────────────────────────────────────────── */
+.ascii-logo {
+  border-radius: 16px;
+  border: 1px solid var(--glass-border);
+  background:
+    radial-gradient(120% 90% at 50% 10%, rgba(139, 92, 246, 0.06), transparent 60%),
+    var(--surface);
+}
+
+.dark .ascii-logo {
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.light .ascii-logo {
+  background:
+    radial-gradient(120% 90% at 50% 10%, rgba(124, 58, 237, 0.08), transparent 60%),
+    rgba(255, 255, 255, 0.6);
+  border-color: rgba(15, 16, 25, 0.06);
+  box-shadow: var(--shadow-md), 0 0 0 1px rgba(15, 16, 25, 0.02);
+}
+
+/* ── Light theme hover-lift shadow refinement ────────────────── */
+.light .hover-lift:hover {
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(15, 16, 25, 0.04);
+}
+
+/* ── Light theme tabs/card inner highlight ───────────────────── */
+.light .tab-active,
+.light .chip {
+  box-shadow: var(--shadow-sm);
+}
+
 /* ── Page shell + header (shared layout) ────────────────────── */
 .page-shell {
   width: 100%;

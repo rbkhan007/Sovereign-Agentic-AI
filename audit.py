@@ -31,13 +31,13 @@ MODULE_NOTES = {
     "hardware.py": "RAM/VRAM detection, nvidia-smi fallback, thread auto-tune, context caps.",
     "metrics.py": "Thread-safe MetricsCollector (loads, latency, tokens per model/task).",
     "arc.py": "ARC reasoning eval harness (grid encode/parse + accuracy).",
-    "orchestrator.py": "Multi-agent pipeline: Hy-MT2 plans + MiniCPM executes; merges global + workspace knowledge.",
+    "orchestrator.py": "Multi-agent pipeline: Hy-MT2 plans + Gemma 4 E4B / Qwen2.5-Omni / Mythos-nano execute; merges global + workspace knowledge.",
     "agents.py": "Agent personas + skills registry shared by CLI, HTTP API and MCP (built-ins protected).",
     "wiki_links.py": "Obsidian-like knowledge graph: [[wiki-links]], #tags, headings, backlinks.",
     "graph_store.py": "Knowledge graph on PostgreSQL: nodes/edges/tags, hybrid search, shortest-path CTE.",
     "lora_manager.py": "LoRA adapters: list/load/unload, PEFT training, GGUF conversion.",
     "image_gen.py": "Local image generation via diffusers Stable Diffusion (CPU-only, opt-in).",
-    "vision.py": "Local image understanding via transformers moondream2 (CPU-only, opt-in).",
+    "vision.py": "Local image understanding via transformers Gemma 3 (CPU-only, on by default).",
     "computer_agent.py": "ReAct computer agent: sandboxed shell/python/file/web tools.",
     "config.py": "App configuration (GPU, threads, DB, model paths, cloud presets, GGUF discovery).",
     "api.py": "FastAPI server: models, chat (stream/full), memory, tools, workspaces, graph, agents, skills, MCP, admin.",
@@ -214,7 +214,7 @@ def main():
     A("")
     A("## Features & Coverage")
     A("")
-    A("- **Models**: Hy-MT2 1.8B Q4_K_M (Strategist) + MiniCPM 1B F16 (Executor) + tool-use variant, lazy load, VRAM LRU.")
+    A("- **Models**: Hy-MT2 1.8B Q4_K_M (Strategist) + Gemma 4 E4B / Qwen2.5-Omni 3B / Mythos-nano (Executors), lazy load, VRAM LRU.")
     A("- **Parallel generation**: up to `parallel_max` executors, Hy-MT2 judge, configurable via `--no-parallel`/`--parallel-max`.")
     A("- **Adaptive router**: per-(task,model) harness fitness with epsilon-greedy exploration.")
     A("- **Streaming**: token-by-token via `llama_cpp(stream=True)` on a worker thread.")
@@ -230,7 +230,7 @@ def main():
     A("")
     A("- **GPU**: AMD Radeon RX 5600 XT, 6 GB VRAM, Vulkan via ggml-vulkan.dll")
     A("- **CPU**: Intel i3-10100F (4C/8T) -> threads auto `n_cores // 2`")
-    A("- **Budget**: Hy-MT2 ~1.1 GB + MiniCPM ~2 GB, typical 1-3 GB within 6 GB")
+    A("- **Budget**: Hy-MT2 ~1.1 GB + Gemma 4 E4B ~3 GB + Qwen2.5-Omni ~2.5 GB + Mythos-nano ~2.7 GB, LRU-evicted within 6 GB")
     A("")
     A("## Known Limitations")
     A("")

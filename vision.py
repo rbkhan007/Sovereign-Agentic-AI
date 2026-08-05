@@ -1,13 +1,18 @@
-"""Local image understanding via moondream2 (transformers), resource-safe.
+"""Local image understanding via transformers VLMs (Gemma 3 / PaliGemma / moondream2), resource-safe.
 
 The RX 5600 XT has no ROCm support and the installed llama-cpp-python build
-lacks CLIP/vision support, so image understanding runs on CPU via the
-transformers moondream2 model. To avoid overloading the machine this module:
+lacks CLIP/vision support, so image understanding runs on CPU via transformers.
+The default model is Google Gemma 3 4B (google/gemma-3-4b-it), with PaliGemma
+and the older moondream2 supported as drop-in alternatives. To avoid overloading
+the machine this module:
 
-  * is opt-in via CONFIG.vision.enabled (default off);
+  * is enabled via CONFIG.vision.enabled (default on; model lazy-loads on demand);
   * lazy-loads the model once, guarded by a free-RAM check (>= 8 GB);
   * serializes inference behind a global lock (one analysis at a time);
   * releases the model on `vision.release()` / low-RAM emergency.
+
+Gemma-family models use the processor + `generate` API (AutoProcessor /
+AutoModelForImageTextToText); moondream2 keeps its `answer_question` pipeline.
 
 Endpoints: GET /v1/vision/config, POST /v1/vision/analyze.
 """
@@ -25,7 +30,7 @@ _VISION_LOCK = threading.Lock()
 _vision_model: Any = None
 _vision_processor: Any = None
 _vision_loaded = False
-_MODEL_ID_DEFAULT = "vikhyat/moondream2"
+_MODEL_ID_DEFAULT = "google/gemma-3-4b-it"
 _MIN_FREE_RAM_MB = 8192
 
 
@@ -52,6 +57,11 @@ def _available_ram_mb() -> int:
         return 8192
 
 
+def _is_gemma(model_id: str) -> bool:
+    m = model_id.lower()
+    return "gemma" in m or "paligemma" in m
+
+
 def vision_config() -> dict:
     c = getattr(CONFIG, "vision", {}) or {}
     return {
@@ -65,8 +75,10 @@ def vision_config() -> dict:
 
 
 def _load_model():
-    """Load the moondream2 model + processor (CPU). Raises ValueError when
-    dependencies are missing, RAM is too low, or the model cannot be fetched."""
+    """Load the configured VLM (Gemma 3 / PaliGemma / moondream2) on CPU.
+
+    Raises ValueError when dependencies are missing, RAM is too low, or the
+    model cannot be fetched."""
     global _vision_model, _vision_processor, _vision_loaded
     with _VISION_LOCK:
         if _vision_loaded:
@@ -80,12 +92,23 @@ def _load_model():
             )
         c = getattr(CONFIG, "vision", {}) or {}
         model_id = c.get("model", _MODEL_ID_DEFAULT)
-        from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: PLC0415
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
-        model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
+        if _is_gemma(model_id):
+            from transformers import AutoModelForImageTextToText, AutoProcessor  # noqa: PLC0415
+            try:
+                processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
+                model = AutoModelForImageTextToText.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
+            except (ValueError, OSError, TypeError):
+                # Fall back for PaliGemma checkpoints exposed as a causal LM.
+                from transformers import AutoModelForCausalLM  # noqa: PLC0415
+                processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
+                model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
+        else:
+            from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: PLC0415
+            processor = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
+            model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
         model.to("cpu")
         model.eval()
-        _vision_processor = tokenizer
+        _vision_processor = processor
         _vision_model = model
         _vision_loaded = True
 
@@ -104,12 +127,43 @@ def _strip_prompt_prefix(answer: str, prompt: str) -> str:
     text = answer.strip()
     if prompt and text.startswith(prompt):
         text = text[len(prompt):].strip()
-    # moondream sometimes echoes a leading question mark / repeat of the prompt
+    # Some VLMs echo a leading question / repeat of the prompt.
     for token in ("\n\n", "Question:"):
         if token in text and text.split(token)[0].strip() == (prompt.strip() if prompt else ""):
             text = text.split(token, 1)[1].strip()
             break
     return text
+
+
+def _run_gemma_inference(img: Any, prompt: str, max_tokens: int) -> str:
+    """Gemma 3 / PaliGemma: processor + generate. Returns the decoded answer."""
+    import torch  # noqa: PLC0415
+    processor = _vision_processor
+    model = _vision_model
+    if hasattr(processor, "apply_chat_template") and hasattr(processor, "image_processor"):
+        # Gemma 3 chat-style inputs.
+        messages = [{
+            "role": "user",
+            "content": [{"type": "image"}, {"type": "text", "text": prompt}],
+        }]
+        inputs = processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        inputs = {k: v.to("cpu") for k, v in inputs.items() if hasattr(v, "to")}
+    else:
+        # PaliGemma-style (images + text passed directly to the processor).
+        inputs = processor(images=img, text=prompt, return_tensors="pt")
+        inputs = {k: v.to("cpu") for k, v in inputs.items() if hasattr(v, "to")}
+    with torch.no_grad():
+        outputs = model.generate(**inputs, max_new_tokens=max_tokens, do_sample=False)
+    if "input_ids" in inputs:
+        outputs = outputs[:, inputs["input_ids"].shape[1]:]
+    answer = processor.decode(outputs[0], skip_special_tokens=True)
+    return answer
 
 
 def analyze_image(image: bytes, prompt: str = "Describe this image in detail.") -> dict:
@@ -133,7 +187,12 @@ def analyze_image(image: bytes, prompt: str = "Describe this image in detail.") 
     start = time.time()
     try:
         with _VISION_LOCK:
-            answer = _vision_model.answer_question(img, prompt, _vision_processor)
+            model_id = (getattr(CONFIG, "vision", {}) or {}).get("model", _MODEL_ID_DEFAULT)
+            max_tokens = int((getattr(CONFIG, "vision", {}) or {}).get("max_tokens", 200))
+            if _is_gemma(model_id):
+                answer = _run_gemma_inference(img, prompt, max_tokens)
+            else:
+                answer = _vision_model.answer_question(img, prompt, _vision_processor)
     except Exception as e:
         release()
         raise RuntimeError(f"Vision inference failed: {e}") from e

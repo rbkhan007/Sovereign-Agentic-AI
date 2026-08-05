@@ -112,6 +112,10 @@ class Orchestrator:
         self.router = ModelRouter(model_manager)
 
     def _resolve_executor(self, model_override: Optional[str]) -> str:
+        if model_override and model_override in self.models.configs:
+            return model_override
+        if self.executor and self.executor in self.models.configs:
+            return self.executor
         resolved = self.router.primary("general", model_override)
         if resolved:
             return resolved
@@ -163,8 +167,15 @@ class Orchestrator:
         logger.info(f"[Parallel] judged {len(candidates)} candidates, best={best} score={scores[best]:.1f}")
         return candidates[best], best
 
-    def _build_exec_prompt(self, conv, thinking: str, web_context: str = "") -> str:
+    def _build_exec_prompt(self, conv, thinking: str, web_context: str = "",
+                           memories: Optional[list] = None) -> str:
         blocks = [conv.get_context(open_assistant=False)]
+        if memories:
+            mem_text = "\n".join(f"- {m[:500]}" for m in memories if m)[:4000]
+            if mem_text:
+                blocks.append(CHAT_TEMPLATE.format(
+                    role="system",
+                    content=f"Relevant context from memory:\n{mem_text}"))
         if web_context:
             blocks.append(CHAT_TEMPLATE.format(role="system", content=web_context))
         if thinking:
@@ -222,13 +233,20 @@ class Orchestrator:
 
         if not sandbox and CONFIG.db.enabled:
             try:
-                ws_scope = workspace_id if workspace_id != "default" else None
-                memories = db.retrieve_similar(user_message, workspace_id=ws_scope)
+                memories = db.retrieve_similar(user_message, workspace_id=None)
                 if workspace_id and workspace_id != "default":
-                    ws_mem = db.search_workspace_knowledge(workspace_id, user_message)
+                    ws_mem = db.retrieve_similar(user_message, workspace_id=workspace_id)
                     known = set(memories)
-                    for m in ws_mem:
-                        text = m.get("thought") if isinstance(m, dict) else str(m)
+                    for mem_item in ws_mem:
+                        mem_raw = mem_item.get("thought") if isinstance(mem_item, dict) else mem_item
+                        text = str(mem_raw) if mem_raw else ""
+                        if text and text not in known:
+                            memories.append(text)
+                            known.add(text)
+                    ws_knowledge = db.search_workspace_knowledge(workspace_id, user_message)
+                    for know_item in ws_knowledge:
+                        know_raw = know_item.get("thought") if isinstance(know_item, dict) else know_item
+                        text = str(know_raw) if know_raw else ""
                         if text and text not in known:
                             memories.append(text)
                             known.add(text)
@@ -270,7 +288,7 @@ class Orchestrator:
 
         task, ranked = self.router.select_executors(user_message, CONFIG.parallel_max, model_override)
 
-        exec_prompt = self._build_exec_prompt(conv, thinking, web_context)
+        exec_prompt = self._build_exec_prompt(conv, thinking, web_context, memories)
 
         if exec_model not in self.models.configs:
             conv.messages.pop()
@@ -380,13 +398,20 @@ class Orchestrator:
         memories = []
         if not sandbox and CONFIG.db.enabled:
             try:
-                ws_scope = workspace_id if workspace_id != "default" else None
-                memories = db.retrieve_similar(user_message, workspace_id=ws_scope)
+                memories = db.retrieve_similar(user_message, workspace_id=None)
                 if workspace_id and workspace_id != "default":
-                    ws_mem = db.search_workspace_knowledge(workspace_id, user_message)
+                    ws_mem = db.retrieve_similar(user_message, workspace_id=workspace_id)
                     known = set(memories)
-                    for m in ws_mem:
-                        text = m.get("thought") if isinstance(m, dict) else str(m)
+                    for mem_item in ws_mem:
+                        mem_raw = mem_item.get("thought") if isinstance(mem_item, dict) else mem_item
+                        text = str(mem_raw) if mem_raw else ""
+                        if text and text not in known:
+                            memories.append(text)
+                            known.add(text)
+                    ws_knowledge = db.search_workspace_knowledge(workspace_id, user_message)
+                    for know_item in ws_knowledge:
+                        know_raw = know_item.get("thought") if isinstance(know_item, dict) else know_item
+                        text = str(know_raw) if know_raw else ""
                         if text and text not in known:
                             memories.append(text)
                             known.add(text)
@@ -429,7 +454,7 @@ class Orchestrator:
             yield {"type": "thinking", "content": thinking}
 
         task = classify_task(user_message)
-        exec_prompt = self._build_exec_prompt(conv, thinking, web_context)
+        exec_prompt = self._build_exec_prompt(conv, thinking, web_context, memories)
 
         parts = []
         if exec_model in self.models.configs:

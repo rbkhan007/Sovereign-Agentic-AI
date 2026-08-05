@@ -5,14 +5,23 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Optional
+from typing import Optional, Protocol
 
 from config import CONFIG, optimal_threads
 
 logger = logging.getLogger(__name__)
 
+
+class ModelManagerLike(Protocol):
+    """Minimal interface the hardware probes need from a model manager."""
+
+    def vram_used(self) -> int: ...
+
 _cache: dict = {}
 _cache_lock = threading.Lock()
+
+_model_manager_ref: Optional["ModelManagerLike"] = None
+_model_manager_lock = threading.Lock()
 
 _live_cache: dict = {}
 _live_lock = threading.Lock()
@@ -80,6 +89,63 @@ def _ram_available_mb() -> int:
     return 0
 
 
+def _dxgi_vram_total_mb() -> int:
+    """Real dedicated video memory via DXGI. Unlike WMI `AdapterRAM`, which is
+    capped at 4095 MB by the 32-bit WDDM report, DXGI `GetDesc` reports the
+    actual VRAM size (e.g. 6103 MB on a 6 GB AMD card). Returns 0 on failure."""
+    if sys.platform != "win32":
+        return 0
+    try:
+        class _GUID(ctypes.Structure):
+            _fields_ = [("Data1", ctypes.c_uint32), ("Data2", ctypes.c_uint16),
+                        ("Data3", ctypes.c_uint16), ("Data4", ctypes.c_ubyte * 8)]
+
+        class _DXGI_ADAPTER_DESC(ctypes.Structure):
+            _fields_ = [
+                ("Description", ctypes.c_wchar * 128),
+                ("VendorId", ctypes.c_uint), ("DeviceId", ctypes.c_uint),
+                ("SubSysId", ctypes.c_uint), ("Revision", ctypes.c_uint),
+                ("DedicatedVideoMemory", ctypes.c_size_t),
+                ("DedicatedSystemMemory", ctypes.c_size_t),
+                ("SharedSystemMemory", ctypes.c_size_t),
+                ("AdapterLuid", ctypes.c_longlong),
+            ]
+
+        def _guid(s: str) -> _GUID:
+            h = s.replace("-", "")
+            return _GUID(int(h[0:8], 16), int(h[8:12], 16), int(h[12:16], 16),
+                         (ctypes.c_ubyte * 8)(*[int(h[i:i+2], 16) for i in range(16, 32, 2)]))
+
+        dxgi = ctypes.WinDLL("dxgi.dll")
+        create = dxgi.CreateDXGIFactory1
+        create.argtypes = [ctypes.POINTER(_GUID), ctypes.POINTER(ctypes.c_void_p)]
+        create.restype = ctypes.c_long
+        factory = ctypes.c_void_p()
+        iid = _guid("770AAE78-F26F-4DBA-A829-253C83D1B387")  # IID_IDXGIFactory1
+        if create(ctypes.byref(iid), ctypes.byref(factory)) != 0:
+            return 0
+        vtbl = ctypes.cast(factory, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        enum_adapters = ctypes.cast(
+            vtbl[7],  # IDXGIFactory::EnumAdapters
+            ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_uint,
+                               ctypes.POINTER(ctypes.c_void_p)),
+        )
+        adapter = ctypes.c_void_p()
+        if enum_adapters(factory, 0, ctypes.byref(adapter)) != 0:
+            return 0
+        avtbl = ctypes.cast(adapter, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        get_desc = ctypes.cast(
+            avtbl[8],  # IDXGIAdapter::GetDesc
+            ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(_DXGI_ADAPTER_DESC)),
+        )
+        desc = _DXGI_ADAPTER_DESC()
+        if get_desc(adapter, ctypes.byref(desc)) != 0:
+            return 0
+        return int(desc.DedicatedVideoMemory // (1024 * 1024))
+    except Exception:
+        return 0
+
+
 def _vram_total_mb() -> int:
     try:
         import torch
@@ -87,6 +153,9 @@ def _vram_total_mb() -> int:
             return int(torch.cuda.get_device_properties(0).total_memory / (1024 * 1024))
     except Exception:
         pass
+    dxgi = _dxgi_vram_total_mb()
+    if dxgi > 0:
+        return dxgi
     try:
         if sys.platform == "win32":
             out = subprocess.run(
@@ -127,7 +196,26 @@ def _vram_used_mb() -> int:
             return int(torch.cuda.memory_allocated() / (1024 * 1024))
     except Exception:
         pass
+    # AMD/Vulkan/CPU backends have no nvidia-smi/torch probe; fall back to the
+    # estimate-based figure the HardwareMonitor uses for eviction, so the live
+    # dashboard and /v1/hardware report real loaded-model VRAM instead of 0.
+    try:
+        mm = _model_manager_ref
+        if mm is not None:
+            est = int(mm.vram_used())
+            if est > 0:
+                return est
+    except Exception:
+        pass
     return 0
+
+
+def register_model_manager(model_manager) -> None:
+    """Record the active ModelManager so VRAM probes can fall back to its
+    loaded-model estimate on backends (AMD/Vulkan/CPU) with no native probe."""
+    global _model_manager_ref
+    with _model_manager_lock:
+        _model_manager_ref = model_manager  # type: ignore[assignment]
 
 
 def _vram_used_mb_cached(ttl: float = _VRAM_TTL) -> int:
@@ -355,7 +443,7 @@ class HardwareMonitor:
 
     def _enforce(self):
         with self._lock:
-            info = detect_hardware(force=True)
+            info = detect_hardware(force=False)
             ram_avail = info.get("ram_available_mb", 0)
             vram_total = info.get("gpu_vram_mb", 0)
             vram_budget = CONFIG.vram_budget_mb or (vram_total - 1024 if vram_total else 0)
@@ -392,6 +480,13 @@ class HardwareMonitor:
                     CONFIG.threads = target_threads
                     CONFIG.sync_threads()
                     logger.info(f"Throttled threads to {CONFIG.threads}")
+            else:
+                # Recover: restore the auto-tuned thread count once CPU pressure
+                # subsides so inference speed isn't permanently degraded.
+                if CONFIG.threads < optimal_threads():
+                    CONFIG.threads = optimal_threads()
+                    CONFIG.sync_threads()
+                    logger.info(f"Restored threads to {CONFIG.threads} after CPU recovered")
 
     def _evict_lru(self, keep: set):
         from models import _least_recently_used
@@ -415,7 +510,28 @@ _hw_lock = threading.Lock()
 
 
 def get_hw_monitor(model_manager=None) -> Optional[HardwareMonitor]:
+    """Return the shared HardwareMonitor, (re)binding it to `model_manager`.
+
+    The first call creates and starts the daemon. Later calls with a *different*
+    manager swap the bound manager so CLI/arc/test managers are watched instead
+    of caching the first (possibly dead) one forever.
+    """
     global _hw_monitor
+    if model_manager is not None:
+        register_model_manager(model_manager)
+    if _hw_monitor is not None and model_manager is not None:
+        if getattr(_hw_monitor, "_mm", None) is model_manager:
+            return _hw_monitor
+        with _hw_lock:
+            if getattr(_hw_monitor, "_mm", None) is not model_manager:
+                old = _hw_monitor
+                _hw_monitor = HardwareMonitor(model_manager)
+                _hw_monitor.start()
+                try:
+                    old.stop()
+                except Exception:
+                    pass
+        return _hw_monitor
     if _hw_monitor is None and model_manager is not None:
         with _hw_lock:
             if _hw_monitor is None:

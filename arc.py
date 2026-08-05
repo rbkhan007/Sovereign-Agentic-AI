@@ -86,10 +86,8 @@ def run_arc_eval(model_manager=None, model_name: Optional[str] = None, limit: Op
     if model_manager is None:
         from models import ModelManager
         model_manager = ModelManager()
-    name = (model_name or getattr(model_manager, "default_model", None)
-            or next(iter(getattr(model_manager, "configs", None) or {}), None) or "default")
-    if not name:
-        return {"dataset": True, "correct": 0, "total": 0, "accuracy": 0.0, "model": None}
+    name = (model_name or next(iter(getattr(model_manager, "configs", None) or {}), None)
+            or "default")
     correct = 0
     for p in puzzles:
         try:

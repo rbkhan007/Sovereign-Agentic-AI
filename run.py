@@ -145,9 +145,9 @@ def start_server(host, port, quiet=False):
         uvicorn.run(app, host=host, port=port, log_level=log_level)
 
 
-def run_cli():
+def run_cli(model_manager=None):
     from cli import main as cli_main
-    cli_main()
+    cli_main(model_manager=model_manager)
 
 
 def run_full(host, port, no_open, nextjs=False):
@@ -162,7 +162,14 @@ def run_full(host, port, no_open, nextjs=False):
     svr.start()
     time.sleep(1.5)
     print("  [Server running in background. Type /help in CLI or open browser.]\n")
-    run_cli()
+    # Share the API's ModelManager with the CLI so GGUFs aren't loaded twice
+    # (double VRAM / duplicate locks-LRU on a 6 GB card).
+    try:
+        import api
+        shared_mm = api.model_manager
+    except Exception:
+        shared_mm = None
+    run_cli(shared_mm)
 
 
 def validate_config():
@@ -282,9 +289,9 @@ def main():
     parser.add_argument("--image-gen", action="store_true",
                         help="Enable local image generation via diffusers (CPU, one at a time)")
     parser.add_argument("--vision", action="store_true",
-                        help="Enable local image understanding via moondream2 (CPU, one at a time)")
+                        help="Enable local image understanding via Gemma 3 (CPU, one at a time)")
     parser.add_argument("--vision-model", metavar="NAME",
-                        help="Vision model id (default vikhyat/moondream2)")
+                        help="Vision model id (default google/gemma-3-4b-it)")
     parser.add_argument("--automl", action="store_true",
                         help="Enable local AutoML (auto-sklearn) data-science agent (Linux-only, opt-in)")
     parser.add_argument("--automl-model-dir", metavar="DIR",
@@ -295,6 +302,8 @@ def main():
                         help="PERMIT the healing agent to execute caller-supplied Python (RCE risk; local opt-in only)")
     parser.add_argument("--allow-unsafe-computer", action="store_true",
                         help="PERMIT the /v1/computer/* API to run un-sandboxed (shell/python RCE risk; local opt-in only)")
+    parser.add_argument("--allow-gui", action="store_true",
+                        help="Enable the computer agent's mouse & keyboard tools (human-like GUI control; local opt-in only)")
     parser.add_argument("--admin-key", metavar="KEY",
                         help="Admin key (X-Admin-Key header) required for control-plane mutations like POST /v1/config, model load/unload, agent/skill/LoRA writes")
     parser.add_argument("--rate-limit", action="store_true",
@@ -390,7 +399,7 @@ def main():
         logger.info("Local image generation enabled (CPU, resource-safe)")
     if args.vision:
         CONFIG.vision["enabled"] = True
-        logger.info("Local vision enabled (moondream2, CPU, resource-safe)")
+        logger.info("Local vision enabled (Gemma 3, CPU, resource-safe)")
     if args.vision_model:
         CONFIG.vision["model"] = args.vision_model
     if args.automl:
@@ -407,6 +416,9 @@ def main():
     if args.allow_unsafe_computer:
         CONFIG.computer["allow_unsafe"] = True
         logger.warning("Computer agent /v1/computer/* MAY EXECUTE shell/python (--allow-unsafe-computer)")
+    if args.allow_gui:
+        CONFIG.computer["allow_gui"] = True
+        logger.info("Computer agent mouse & keyboard (GUI) tools enabled (--allow-gui)")
     if args.admin_key:
         CONFIG.admin_key = args.admin_key.strip()
         logger.info("Admin key set: control-plane mutations require X-Admin-Key")

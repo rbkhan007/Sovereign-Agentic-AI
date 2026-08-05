@@ -75,7 +75,7 @@ and `package-lock.json` are now correctly ignored; 98 legitimate source files re
 
 | Check | Result |
 |-------|--------|
-| Unit tests | 703 / 703 passed |
+| Unit tests | 759 / 759 passed |
 | TypeScript compilation | PASS (10/10 pages) |
 | Pylint | PASS |
 | Mypy | PASS |
@@ -93,7 +93,7 @@ and `package-lock.json` are now correctly ignored; 98 legitimate source files re
 
 - Frontend API calls match backend routes
 - Agent/skill names synced via `/v1/agents` and `/v1/skills`
-- Model IDs (`hy-mt2`, `minicpm-v9`, `minicpm-tooluse`) consistent across docs and code
+- Model IDs (`hy-mt2`, `gemma-4-e4b`, `qwen2.5-omni-3b`, `mythos-nano`) consistent across docs and code
 - No stale references to old model names or old DB names
 - Test counts, page counts, and route counts match actual codebase
 - Cloud presets include Claude/Anthropic with `ANTHROPIC_API_KEY` env var auto-detection

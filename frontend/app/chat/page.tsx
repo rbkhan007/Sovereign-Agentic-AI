@@ -231,6 +231,7 @@ export default function ChatPage() {
     const savedMessages = getStorage<ChatMessage[]>(STORAGE_KEYS.messages, []);
     const urlConvId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('conv') : '';
     const savedConvId = urlConvId || getStorage<string>(STORAGE_KEYS.convId, '');
+    const urlAgent = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('agent') : '';
 
     let mounted = true;
     async function load() {
@@ -241,11 +242,14 @@ export default function ChatPage() {
           fetchJSON('/v1/workspaces'),
         ]);
         if (!mounted) return;
-        setAgents(toArray<Agent>(a));
+        const agentList = toArray<Agent>(a);
+        setAgents(agentList);
         setSkills(toArray<Skill>(s));
         const wsList = toArray<Workspace>(w);
         setWorkspaces(wsList);
-
+        if (urlAgent) {
+          if (agentList.some((ag) => ag.name === urlAgent)) setSelectedAgent(urlAgent);
+        }
         const { modelList, loadedModels } = await refreshModels();
 
         const displayModels = loadedModels.length > 0 ? loadedModels : modelList;

@@ -472,8 +472,8 @@ class TUIRenderer:
         # messages
         self._render_messages(width)
 
-        # reset scroll region
-        sys.stdout.write(f"\033[{self.term_height};{self.term_height}r")
+        # reset scroll region to full terminal
+        sys.stdout.write(f"\033[1;{self.term_height}r")
         sys.stdout.flush()
 
         # input area
@@ -502,19 +502,45 @@ class TUIRenderer:
             sys.stdout.flush()
             return
 
-        visible = self.msg_area_h
-        start = max(0, len(self.messages) - visible - self.scroll)
-        end = min(len(self.messages), start + visible)
+        # Each rendered cell is 3 + wrapped-lines tall, so count by *rows*
+        # (plus the scroll offset), not by number of messages.
+        available = max(1, self.msg_area_h)
+        heights = []
+        total_h = 0
+        for i in range(len(self.messages) - 1, -1, -1):
+            h = self._message_cell_height(self.messages[i], width)
+            if total_h + h > available:
+                break
+            heights.append((i, h))
+            total_h += h
+        heights.reverse()
+        end = len(self.messages)
+        if self.scroll > 0:
+            # scroll up: drop whole cells from the bottom until the offset is met
+            idx = len(heights) - 1
+            offset = self.scroll
+            while idx >= 0 and offset > 0:
+                offset -= heights[idx][1]
+                if offset > 0:
+                    idx -= 1
+            idx = max(0, idx)
+            if heights:
+                heights = heights[:idx + 1]
+
         y = self.msg_start_y
-        for i in range(start, end):
-            msg = self.messages[i]
-            h = self._render_message_cell(msg, y, width)
-            y += h
+        for i, _h in heights:
+            y += self._render_message_cell(self.messages[i], y, width)
         # scroll indicator at bottom of message area
-        if len(self.messages) > visible:
-            info = _dim(f"  {start+1}-{end} of {len(self.messages)}")
+        if len(self.messages) > len(heights):
+            start = heights[0][0] + 1 if heights else len(self.messages)
+            info = _dim(f"  {start}-{end} of {len(self.messages)}")
             sys.stdout.write(f"\033[{self.input_start_y - 1};1H{info}")
             sys.stdout.flush()
+
+    def _message_cell_height(self, msg: Message, width: int) -> int:
+        pad = 1
+        inner = max(1, width - (pad * 2) - 2)
+        return 4 + len(self._wrap(msg.content, inner))
 
     def _render_input_area(self, width: int):
         y = self.input_start_y
@@ -1434,7 +1460,8 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
     if cmd == "/computer":
         sub = parts[1].lower() if len(parts) > 1 else ""
         if sub == "tools":
-            agent = create_computer_agent(mm, orch, sandbox=st.get("computer_sandbox", False))
+            agent = create_computer_agent(mm, orch, sandbox=st.get("computer_sandbox", False),
+                                          allow_gui=bool(CONFIG.computer.get("allow_gui")))
             print(_cyan("  Computer Agent Tools:"))
             for t in agent.registry.list_tools():
                 safe = " [sandbox-safe]" if t.sandbox_safe else ""
@@ -1447,6 +1474,14 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
                 st["computer_sandbox"] = not st.get("computer_sandbox", False)
             mode = "ON (read-only)" if st.get("computer_sandbox") else "OFF (full access)"
             print(f"Computer sandbox: {mode}")
+            return
+        if sub == "gui":
+            if len(parts) > 2:
+                CONFIG.computer["allow_gui"] = parts[2].lower() in ("on", "true", "1")
+            else:
+                CONFIG.computer["allow_gui"] = not bool(CONFIG.computer.get("allow_gui"))
+            mode = "ON (mouse+keyboard)" if CONFIG.computer.get("allow_gui") else "OFF"
+            print(f"Computer GUI tools: {mode}")
             return
         if sub in ("cancel", "stop"):
             if "_computer_agent" in st and st["_computer_agent"] is not None:
@@ -1463,7 +1498,8 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
             print("  /computer sandbox on   enable read-only mode")
             return
         sandbox = st.get("computer_sandbox", False)
-        agent = create_computer_agent(mm, orch, sandbox=sandbox)
+        agent = create_computer_agent(mm, orch, sandbox=sandbox,
+                                      allow_gui=bool(CONFIG.computer.get("allow_gui")))
         st["_computer_agent"] = agent
         mode_label = _yellow("SANDBOX") if sandbox else _green("FULL ACCESS")
         print(_cyan(f"\n  Computer Agent [{mode_label}] | Goal: {goal}"))
@@ -1937,9 +1973,12 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
 
 # ---------- main loop ----------
 
-def main():
+def main(model_manager=None):
     _init_color()
-    mm = ModelManager()
+    if model_manager is None:
+        mm = ModelManager()
+    else:
+        mm = model_manager
     mem = MemoryManager()
     orch = Orchestrator(mm, mem)
 

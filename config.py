@@ -64,6 +64,8 @@ class ModelConfig:
     role: str
     n_ctx: int = 4096
     n_threads: int = 0
+    n_batch: int = 0
+    n_ubatch: int = 0
     n_gpu_layers: int = -1
     temperature: float = 0.2
     top_p: float = 0.95
@@ -114,8 +116,8 @@ class AppConfig:
         "steps": 18,
     })
     vision: dict = field(default_factory=lambda: {
-        "enabled": False,
-        "model": "vikhyat/moondream2",
+        "enabled": True,
+        "model": "google/gemma-3-4b-it",
         "max_tokens": 200,
     })
     automl: dict = field(default_factory=lambda: {
@@ -135,6 +137,7 @@ class AppConfig:
     })
     computer: dict = field(default_factory=lambda: {
         "allow_unsafe": False,
+        "allow_gui": False,
         "max_steps": 25,
     })
     rate_limit: dict = field(default_factory=lambda: {
@@ -162,16 +165,24 @@ class AppConfig:
                           "summarize", "translate", "creative", "tool"],
         ),
         ModelConfig(
-            path=os.path.join(MODELS_DIR, "MiniCPM5-1B-Agentic-v9-f16.gguf"),
-            name="minicpm-v9", role="Executor",
-            n_gpu_layers=-1, temperature=0.15,
-            capabilities=["general", "code", "math", "summarize", "translate"],
+            path=os.path.join(MODELS_DIR, "gemma-4-E4B-it-qat-UD-Q2_K_XL.gguf"),
+            name="gemma-4-e4b", role="Executor",
+            n_gpu_layers=-1, n_ctx=4096, temperature=0.2,
+            capabilities=["general", "code", "math", "summarize",
+                          "translate", "creative", "tool", "analyze"],
         ),
         ModelConfig(
-            path=os.path.join(MODELS_DIR, "minicpm5-1b-agentic-tooluse.F16.gguf"),
-            name="minicpm-tooluse", role="ToolExecutor",
-            n_gpu_layers=-1, temperature=0.1,
-            capabilities=["tool", "code"],
+            path=os.path.join(MODELS_DIR, "Qwen2.5-Omni-3B-Q4_K_M.gguf"),
+            name="qwen2.5-omni-3b", role="Executor",
+            n_gpu_layers=-1, n_ctx=4096, temperature=0.2,
+            capabilities=["general", "code", "math", "summarize",
+                          "translate", "creative", "analyze"],
+        ),
+        ModelConfig(
+            path=os.path.join(MODELS_DIR, "mythos-nano-Q5_K_M.gguf"),
+            name="mythos-nano", role="Executor",
+            n_gpu_layers=-1, n_ctx=4096, temperature=0.15,
+            capabilities=["general", "code", "math", "summarize", "translate"],
         ),
     ])
 
@@ -181,6 +192,10 @@ class AppConfig:
         for m in self.models:
             if m.n_threads == 0:
                 m.n_threads = t
+            if m.n_batch == 0:
+                m.n_batch = 2048
+            if m.n_ubatch == 0:
+                m.n_ubatch = 512
         if not self.gpu_name:
             self.gpu_name = os.environ.get("LLM_GPU_NAME", "GPU")
         if os.environ.get("API_TOKEN"):
@@ -278,6 +293,8 @@ class AppConfig:
             self.embedder["base_url"] = os.environ["LLM_EMBEDDER_BASE_URL"].strip()
         if os.environ.get("LLM_ALLOW_UNSAFE_COMPUTER", "").strip().lower() in ("1", "true", "yes", "on"):
             self.computer["allow_unsafe"] = True
+        if os.environ.get("LLM_ALLOW_GUI", "").strip().lower() in ("1", "true", "yes", "on"):
+            self.computer["allow_gui"] = True
         if os.environ.get("LLM_ADMIN_KEY", "").strip():
             self.admin_key = os.environ["LLM_ADMIN_KEY"].strip()
         if os.environ.get("LLM_RATE_LIMIT", "").strip().lower() in ("1", "true", "yes", "on"):

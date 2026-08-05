@@ -12,11 +12,11 @@ logger = logging.getLogger(__name__)
 EXECUTOR_ROLES = {"Executor", "ToolExecutor", "Strategist"}
 
 TASK_KEYWORDS = {
-    "code": ["code", "python", "javascript", "typescript", "function", "def ", "class", "bug",
-             "refactor", "debug", "script", "regex", "sql", "html", "css", "api", "json",
+    "code": ["code", "python", "javascript", "typescript", "function", "def ", "class",
+             "refactor", "debug", "script", "regex", "sql", "html", "css", "json",
              "exception", "compile", "syntax", "variable", "import", "algorithm", "implement",
-             "write a function", "error", "fix", "program", "loop", "array", "string manipulation",
-             "file", "read", "write", "parse", "data structure"],
+             "write a function", "program", "loop", "array", "string manipulation",
+             "data structure"],
     "math": ["math", "calculate", "equation", "solve", "algebra", "geometry", "add", "subtract",
              "multiply", "divide", "percentage", "2+2", "integral", "derivative", "sum of",
              "probability", "statistics", "average", "median", "formula", "compute"],
@@ -88,6 +88,12 @@ class Harness:
         age = max(0, self.generation - d.get("last_gen", 0))
         recent = self.decay ** age
         return success * 60.0 + speed * 30.0 + recent * 10.0
+
+    def has_recorded(self, task: str, candidates: List[str]) -> bool:
+        """True if any candidate has at least one real measurement for the task."""
+        with self._lock:
+            return any(self._data.get((task, c), {}).get("attempts", 0) > 0
+                       for c in candidates)
 
     def choose(self, task: str, candidates: List[str], default: Optional[str] = None) -> Optional[str]:
         if not candidates:
@@ -218,7 +224,18 @@ class ModelRouter:
         cands = self.executor_names()
         primary = [n for n in cands if task in self._capabilities(n)]
         backup = [n for n in cands if n not in primary]
-        ordered = self.harness.ranked(task, primary) + backup
+        if primary:
+            # epsilon-greedy: once real measurements exist, occasionally explore
+            # a non-top capable model so the harness keeps learning (choose()
+            # falls back to ranked when not exploring or before any data lands)
+            if self.harness.has_recorded(task, primary):
+                picked = self.harness.choose(task, primary)
+            else:
+                picked = None
+            ordered = ([picked] + [n for n in primary if n != picked] if picked else primary)
+        else:
+            ordered = []
+        ordered = ordered + self.harness.ranked(task, backup)
         instances = getattr(self.models, "instances", {}) or {}
         loaded_first = []
         loaded_last = []
@@ -234,18 +251,10 @@ class ModelRouter:
 
     def select_executors(self, text: str, max_models: int, model_override: Optional[str] = None):
         task = classify_task(text)
-        instances = getattr(self.models, "instances", {}) or {}
         if model_override and model_override in self.models.configs:
             rest = [n for n in self.executor_names() if n != model_override]
             ranked = [model_override] + self.harness.ranked(task, rest)
-            loaded_first = []
-            loaded_last = []
-            for n in ranked:
-                if n in instances:
-                    loaded_first.append(n)
-                else:
-                    loaded_last.append(n)
-            return task, (loaded_first + loaded_last)[:max(1, max_models)]
+            return task, ranked[:max(1, max_models)]
         ranked = self.rank_for_task(task, max_models)
         return task, ranked
 

@@ -173,6 +173,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Gzip-compress API/HTML responses for faster page loads. Starlette only
+# compresses responses with a known Content-Length, so SSE streams (which are
+# chunked) and binary downloads are left untouched automatically.
+try:
+    from starlette.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=500)
+except Exception:  # pragma: no cover - defensive; GZipMiddleware ships with starlette
+    pass
+
 
 @app.middleware("http")
 async def api_auth(request: Request, call_next):
@@ -1738,7 +1747,8 @@ def admin_metrics():
 @app.get("/v1/computer/tools")
 def computer_tools():
     from computer_agent import create_computer_agent
-    agent = create_computer_agent(model_manager, orchestrator)
+    agent = create_computer_agent(model_manager, orchestrator,
+                                  allow_gui=bool(CONFIG.computer.get("allow_gui")))
     return {"tools": [{"name": t.name, "description": t.description,
                         "sandbox_safe": t.sandbox_safe, "dangerous": t.dangerous,
                         "parameters": t.parameters}
@@ -1772,7 +1782,8 @@ def computer_run(req: ComputerRunRequest):
     from computer_agent import create_computer_agent
     sandbox = _computer_sandbox(req)
     agent = create_computer_agent(model_manager, orchestrator,
-                                  sandbox=sandbox, max_steps=req.max_steps)
+                                  sandbox=sandbox, max_steps=req.max_steps,
+                                  allow_gui=bool(CONFIG.computer.get("allow_gui")))
     result = agent.run(req.goal)
     return {
         "success": result.success,
@@ -1795,7 +1806,8 @@ async def computer_stream(req: ComputerRunRequest):
 
     sandbox = _computer_sandbox(req)
     agent = create_computer_agent(model_manager, orchestrator,
-                                  sandbox=sandbox, max_steps=req.max_steps)
+                                  sandbox=sandbox, max_steps=req.max_steps,
+                                  allow_gui=bool(CONFIG.computer.get("allow_gui")))
 
     async def event_gen():
         queue = asyncio.Queue()
@@ -2403,14 +2415,21 @@ class ToolRequest(BaseModel):
     text: str
     max_length: Optional[int] = 200
 
+
+def _preferred_tool_model(role: str = "executor") -> Optional[str]:
+    """Pick a loaded (or loadable) model by role for the lightweight tools."""
+    for m in model_manager.configs.values():
+        if m.role and m.role.lower().startswith(role):
+            return m.name
+    if "gemma-4-e4b" in model_manager.configs:
+        return "gemma-4-e4b"
+    return None
+
 @app.post("/v1/tools/summarize")
 def tool_summarize(req: ToolRequest):
     if not model_manager.configs:
         raise HTTPException(400, "No models loaded")
-    if "minicpm-v9" in model_manager.configs:
-        model = "minicpm-v9"
-    else:
-        model = list(model_manager.configs.keys())[0]
+    model = _preferred_tool_model("executor") or list(model_manager.configs.keys())[0]
     prompt = f"Summarize the following text concisely:\n\n{req.text}\n\nSummary:"
     try:
         text = model_manager.generate(model, prompt, max_tokens=req.max_length)
@@ -2446,10 +2465,7 @@ class TranslateRequest(BaseModel):
 def tool_translate(req: TranslateRequest):
     if not model_manager.configs:
         raise HTTPException(400, "No models loaded")
-    if "minicpm-v9" in model_manager.configs:
-        model = "minicpm-v9"
-    else:
-        model = list(model_manager.configs.keys())[0]
+    model = _preferred_tool_model("executor") or list(model_manager.configs.keys())[0]
     prompt = (
         f"Translate the following text to {req.target_language}:\n\n"
         f"{req.text}\n\nTranslation:"

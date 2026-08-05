@@ -6,7 +6,7 @@ import httpx
 PORT = sys.argv[1] if len(sys.argv) > 1 else "8070"
 BASE = f"http://localhost:{PORT}"
 
-MODEL = "minicpm-v9"
+MODEL = "mythos-nano"
 PASSED = 0
 FAILED = 0
 

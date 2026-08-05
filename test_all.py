@@ -71,7 +71,7 @@ check("parallel defaults", CONFIG.parallel_enabled is False and CONFIG.parallel_
 check("prune defaults", CONFIG.prune_interval_hours == 6 and CONFIG.prune_max_age_days == 30)
 check("gen timeout default", CONFIG.gen_timeout_s == 240.0, f"({CONFIG.gen_timeout_s})")
 check("sandbox default off", CONFIG.sandbox is False)
-check("model roles", [m.role for m in CONFIG.models] == ["Strategist", "Executor", "ToolExecutor"])
+check("model roles", [m.role for m in CONFIG.models] == ["Strategist", "Executor", "Executor", "Executor"])
 check("sync_threads propagates", all(m.n_threads == CONFIG.threads for m in CONFIG.models))
 
 old_env = os.environ.copy()
@@ -559,7 +559,45 @@ with mock.patch.object(db_mod, "get_pool", return_value=pool), \
     sqls = [s for s, _ in executed if "agent_name = %s" in s]
     check("retrieve agent filter", len(sqls) == 1 and r == ["x1"])
 
+    n0 = len(executed)
+    db_mod.retrieve_similar("default-scoped q")
+    default_sqls = [s for s, _ in executed[n0:] if "SELECT thought" in s]
+    check("retrieve unscoped stays in default ws",
+          bool(default_sqls) and "workspace_id = 'default'" in default_sqls[-1],
+          f"({default_sqls[-1] if default_sqls else 'none'})")
+    n0 = len(executed)
+    db_mod.retrieve_similar("ws-scoped q", workspace_id="lab")
+    ws_sqls = [(s, p) for s, p in executed[n0:] if "SELECT thought" in s]
+    check("retrieve workspace-scoped sql",
+          bool(ws_sqls) and "workspace_id = %s" in ws_sqls[-1][0] and ws_sqls[-1][1][1] == "lab",
+          f"({ws_sqls[-1] if ws_sqls else 'none'})")
+
     check("count_memories", db_mod.count_memories() == 2)
+    n0 = len(executed)
+    db_mod.count_memories()
+    cnt_sqls = [s for s, _ in executed[n0:] if s.startswith("SELECT COUNT(*)")]
+    check("count_memories unscoped stays in default ws",
+          bool(cnt_sqls) and "workspace_id = 'default'" in cnt_sqls[-1],
+          f"({cnt_sqls[-1] if cnt_sqls else 'none'})")
+    n0 = len(executed)
+    db_mod.count_memories(workspace_id="lab")
+    cnt_ws = [(s, p) for s, p in executed[n0:] if s.startswith("SELECT COUNT(*)")]
+    check("count_memories workspace sql",
+          bool(cnt_ws) and "workspace_id = %s" in cnt_ws[-1][0] and cnt_ws[-1][1] == ("lab",),
+          f"({cnt_ws[-1] if cnt_ws else 'none'})")
+
+    n0 = len(executed)
+    db_mod.recent_memories(limit=3)
+    rec_sqls = [s for s, _ in executed[n0:] if "ORDER BY created_at" in s]
+    check("recent_memories unscoped stays in default ws",
+          bool(rec_sqls) and "workspace_id = 'default'" in rec_sqls[-1],
+          f"({rec_sqls[-1] if rec_sqls else 'none'})")
+    n0 = len(executed)
+    db_mod.recent_memories(limit=3, workspace_id="lab")
+    rec_ws = [(s, p) for s, p in executed[n0:] if "ORDER BY created_at" in s]
+    check("recent_memories workspace sql",
+          bool(rec_ws) and "workspace_id = %s" in rec_ws[-1][0] and rec_ws[-1][1][0] == "lab",
+          f"({rec_ws[-1] if rec_ws else 'none'})")
     check("prune_memories rowcount", db_mod.prune_memories(30) == 3)
     prune_sqls = [(s, p) for s, p in executed if s.startswith("DELETE FROM agent_memory")]
     check("prune param not in literal",
@@ -840,7 +878,7 @@ _gconn.cur.fetchall = lambda: _gconn.cur.rows
 
 with _mock.patch.object(gs.db, "get_pool", return_value=_gpool), \
         _mock.patch.object(gs.db, "get_embedder", return_value=FakeEmbedder()), \
-        _mock.patch.object(gs, "get_node", side_effect=lambda nid: {"id": nid, "title": f"n{nid}"}):
+        _mock.patch.object(gs, "get_node", side_effect=lambda nid, conn=None: {"id": nid, "title": f"n{nid}"}):
     gs.ensure_schema()
     check("ensure_schema creates nodes", any("CREATE TABLE IF NOT EXISTS nodes" in s for s, _ in _exec2))
     check("ensure_schema creates edges", any("CREATE TABLE IF NOT EXISTS edges" in s for s, _ in _exec2))
@@ -1593,13 +1631,13 @@ with mock.patch.object(api_mod.model_manager, "generate", side_effect=fake_gener
     r = client.post("/v1/config", json={"key": "openai.chat_model", "value": "gpt-4o"})
     check("config openai.chat_model", r.json()["value"] == "gpt-4o" and CONFIG.openai.chat_model == "gpt-4o")
 
-    r = client.post("/v1/config", json={"key": "model.minicpm-v9.temperature", "value": 0.7})
+    r = client.post("/v1/config", json={"key": "model.gemma-4-e4b.temperature", "value": 0.7})
     check("config model.temperature", r.json()["value"] == 0.7)
 
     r = client.post("/v1/config", json={"key": "model.bogus.temperature", "value": 0.5})
     check("config model.bogus 404", r.status_code == 404)
 
-    r = client.post("/v1/config", json={"key": "model.minicpm-v9.n_ctx", "value": 4096})
+    r = client.post("/v1/config", json={"key": "model.gemma-4-e4b.n_ctx", "value": 4096})
     check("config model.n_ctx", r.json()["value"] == 4096)
 
     _cloud_saved = CONFIG.cloud_provider
@@ -1856,7 +1894,7 @@ with mock.patch.object(api_mod.model_manager, "generate", side_effect=fake_gener
     check("POST config unknown key", r.status_code == 400)
     r = client.post("/v1/config", json={"key": "model.nope.temperature", "value": 0.5})
     check("POST config unknown model", r.status_code == 404)
-    r = client.post("/v1/config", json={"key": "model.minicpm-v9.bogus", "value": 1})
+    r = client.post("/v1/config", json={"key": "model.gemma-4-e4b.bogus", "value": 1})
     check("POST config bad model attr", r.status_code == 400)
 
 section("Vision (vision.py + API, mocks)")
@@ -1865,13 +1903,17 @@ _vis_client = TestClient(api_mod.app)
 r = _vis_client.get("/v1/vision/config")
 j = r.json()
 check("GET /v1/vision/config shape", all(k in j for k in ["enabled", "model", "device", "deps_available", "loaded"]))
-check("GET /v1/vision/config default-off", j["enabled"] is False and j["model"] == "vikhyat/moondream2")
+check("GET /v1/vision/config default-on", j["enabled"] is True and j["model"] == "google/gemma-3-4b-it")
 
 r = _vis_client.post("/v1/vision/analyze", json={"image": "aGVsbG8=", "prompt": "Describe"})
-check("POST vision disabled -> 400", r.status_code == 400 and "disabled" in r.text.lower())
+check("POST vision invalid image -> 400", r.status_code == 400 and ("Could not decode image" in r.text or "image data is required" in r.text))
 
+r = _vis_client.post("/v1/config", json={"key": "vision.enabled", "value": "false"})
+check("POST config vision.enabled", r.status_code == 200 and r.json()["value"] is False)
+r = _vis_client.post("/v1/vision/analyze", json={"image": "aGVsbG8=", "prompt": "Describe"})
+check("POST vision disabled -> 400", r.status_code == 400 and "disabled" in r.text.lower())
 r = _vis_client.post("/v1/config", json={"key": "vision.enabled", "value": "true"})
-check("POST config vision.enabled", r.status_code == 200 and r.json()["value"] is True)
+check("POST config vision.enabled re-enable", r.status_code == 200 and r.json()["value"] is True)
 r = _vis_client.post("/v1/config", json={"key": "vision.bogus", "value": 1})
 check("POST config vision unknown key -> 400", r.status_code == 400)
 r = _vis_client.post("/v1/config", json={"key": "vision.max_tokens", "value": 50})
@@ -1889,7 +1931,7 @@ with mock.patch.object(vision_mod, "vision_enabled", return_value=True), \
         mock.patch.object(vision_mod, "analyze_image_base64",
                           return_value={"description": "A red circle on white.",
                                         "prompt": "Describe this image in detail.",
-                                        "model": "vikhyat/moondream2", "device": "cpu", "elapsed_s": 0.5}), \
+                                        "model": "google/gemma-3-4b-it", "device": "cpu", "elapsed_s": 0.5}), \
         mock.patch.object(vision_mod, "describe_image_file", return_value="A red circle on white."):
     r = _vis_client.post("/v1/vision/analyze", json={"image": "aGVsbG8=", "prompt": "Describe this image in detail."})
     j = r.json()

@@ -53,6 +53,21 @@ class SafeStaticFiles(StaticFiles):
             )
         return resp
 
+
+class CacheStaticFiles(StaticFiles):
+    """StaticFiles that adds long-lived cache headers.
+
+    Next.js static exports use content-hashed filenames (_next/static/chunks/
+    and css), so they are safe to cache immutably. Assets served through this
+    class get `Cache-Control: public, max-age=31536000, immutable` unless the
+    path is a known un-hashed route (favicon)."""
+
+    def file_response(self, full_path, stat_result, scope, status_code: int = 200):
+        resp = super().file_response(full_path, stat_result, scope, status_code)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
+
 FALLBACK_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -318,17 +333,17 @@ def _mount_nextjs(api_app: FastAPI):
         # Mount static assets from build/static/
         static_dir = os.path.join(NEXT_BUILD_DIR, "static")
         if os.path.isdir(static_dir):
-            api_app.mount("/_next/static", StaticFiles(directory=static_dir), name="next-static")
+            api_app.mount("/_next/static", CacheStaticFiles(directory=static_dir), name="next-static")
             logger.info("Mounted Next.js static assets from %s", static_dir)
 
         # Also try mounting from chunks directory directly for compatibility
         chunks_dir = os.path.join(static_dir, "chunks")
         if os.path.isdir(chunks_dir):
-            api_app.mount("/_next/static/chunks", StaticFiles(directory=chunks_dir), name="next-chunks")
+            api_app.mount("/_next/static/chunks", CacheStaticFiles(directory=chunks_dir), name="next-chunks")
 
         css_dir = os.path.join(static_dir, "css")
         if os.path.isdir(css_dir):
-            api_app.mount("/_next/static/css", StaticFiles(directory=css_dir), name="next-css")
+            api_app.mount("/_next/static/css", CacheStaticFiles(directory=css_dir), name="next-css")
 
         _NEXT_MOUNTED = True
         logger.info("Next.js build mounted from %s", NEXT_BUILD_DIR)
@@ -341,7 +356,7 @@ def create_web_app(api_app: FastAPI) -> FastAPI:
     os.makedirs(STATIC_DIR, exist_ok=True)
 
     if not _STATIC_MOUNTED and not any(getattr(r, "path", None) == "/static" for r in api_app.routes):
-        api_app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+        api_app.mount("/static", SafeStaticFiles(directory=STATIC_DIR), name="static")
         _STATIC_MOUNTED = True
 
     # Serve generated images (image_gen.py writes PNGs here).
@@ -417,7 +432,7 @@ def create_web_app(api_app: FastAPI) -> FastAPI:
         if etag:
             if request.headers.get("if-none-match") == etag:
                 return Response(status_code=304)
-            headers = {"ETag": etag, "Cache-Control": "no-cache"}
+            headers = {"ETag": etag, "Cache-Control": "public, max-age=30, must-revalidate"}
         else:
             headers = {"Cache-Control": "no-cache"}
         return HTMLResponse(html, headers=headers)

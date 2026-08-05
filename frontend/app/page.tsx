@@ -13,7 +13,7 @@ import { t } from '@/lib/i18n';
 import { Activity, Cpu, HardDrive, Zap, ArrowRight, RefreshCw, Loader2, LayoutDashboard } from 'lucide-react';
 import Link from 'next/link';
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import asciiArt from '@/public/ascii-art.txt?raw';
+import AsciiLogo from '@/components/AsciiLogo';
 
 const MAX_HISTORY = 30;
 
@@ -135,7 +135,7 @@ export default function Dashboard() {
 
   return (
     <div className="page-shell space-y-6">
-      <pre className="ascii-logo select-none overflow-x-auto whitespace-pre text-accent/70 font-mono text-[7px] leading-[1.1] sm:text-[8px] lg:text-[9px] max-w-full" aria-label={t('dashboard.title')}>{asciiArt}</pre>
+      <AsciiLogo />
       <PageHeader
         title={t('dashboard.title')}
         subtitle={t('dashboard.subtitle')}

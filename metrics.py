@@ -54,9 +54,10 @@ class MetricsCollector:
             if model:
                 m = self._model(model)
                 m["tokens_out"] += tokens_out
-                m["latency_sum"] += latency
-                m["latency_n"] += 1
-                if not ok:
+                if ok:
+                    m["latency_sum"] += latency
+                    m["latency_n"] += 1
+                else:
                     m["errors"] += 1
                 m["last_used"] = time.time()
             if tokens_out > 0:

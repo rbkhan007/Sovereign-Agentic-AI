@@ -17,6 +17,7 @@ embedding model is unavailable.
 
 import json
 import logging
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,15 +27,7 @@ logger = logging.getLogger(__name__)
 
 _NODE_TYPES = ("document", "conversation", "memory", "concept", "tag")
 _EMBED_DIM = 384
-_SCHEMA_ENSURE_LOCK = None  # replaced by threading.Lock at import time
-
-try:
-    import threading
-
-    _SCHEMA_ENSURE_LOCK = threading.Lock()
-except Exception:  # pragma: no cover
-    pass
-
+_SCHEMA_ENSURE_LOCK = threading.Lock()
 _SCHEMA_DONE = threading.Event()
 
 _NODES_INDEX_MIN_ROWS = 2000
@@ -226,8 +219,9 @@ def create_node(
         db.put_connection(conn)
 
 
-def get_node(node_id: int) -> Optional[Dict[str, Any]]:
-    conn = db.get_connection()
+def get_node(node_id: int, conn=None) -> Optional[Dict[str, Any]]:
+    own = conn is None
+    conn = conn if conn is not None else db.get_connection()
     if not conn:
         return None
     try:
@@ -259,7 +253,8 @@ def get_node(node_id: int) -> Optional[Dict[str, Any]]:
         logger.warning(f"Get node failed: {e}")
         return None
     finally:
-        db.put_connection(conn)
+        if own:
+            db.put_connection(conn)
 
 
 def find_node_by_title(node_type: str, title: str,
@@ -424,9 +419,10 @@ def delete_edges_from(source_id: int, edge_types: Tuple[str, ...] = ()) -> int:
         db.put_connection(conn)
 
 
-def linked_nodes(node_id: int, edge_type: Optional[str] = None) -> List[Dict[str, Any]]:
+def linked_nodes(node_id: int, edge_type: Optional[str] = None, conn=None) -> List[Dict[str, Any]]:
     """Nodes reachable from ``node_id`` (outgoing edges)."""
-    conn = db.get_connection()
+    own = conn is None
+    conn = conn if conn is not None else db.get_connection()
     if not conn:
         return []
     sql = (
@@ -454,12 +450,14 @@ def linked_nodes(node_id: int, edge_type: Optional[str] = None) -> List[Dict[str
         logger.warning(f"Linked nodes failed: {e}")
         return []
     finally:
-        db.put_connection(conn)
+        if own:
+            db.put_connection(conn)
 
 
-def backlinks(node_id: int, edge_type: Optional[str] = None) -> List[Dict[str, Any]]:
+def backlinks(node_id: int, edge_type: Optional[str] = None, conn=None) -> List[Dict[str, Any]]:
     """Nodes that link TO ``node_id`` (incoming edges)."""
-    conn = db.get_connection()
+    own = conn is None
+    conn = conn if conn is not None else db.get_connection()
     if not conn:
         return []
     sql = (
@@ -487,11 +485,13 @@ def backlinks(node_id: int, edge_type: Optional[str] = None) -> List[Dict[str, A
         logger.warning(f"Backlinks failed: {e}")
         return []
     finally:
-        db.put_connection(conn)
+        if own:
+            db.put_connection(conn)
 
 
-def node_degrees(node_id: int) -> Dict[str, int]:
-    conn = db.get_connection()
+def node_degrees(node_id: int, conn=None) -> Dict[str, int]:
+    own = conn is None
+    conn = conn if conn is not None else db.get_connection()
     if not conn:
         return {"in_degree": 0, "out_degree": 0}
     try:
@@ -505,7 +505,8 @@ def node_degrees(node_id: int) -> Dict[str, int]:
         logger.warning(f"Degrees failed: {e}")
         return {"in_degree": 0, "out_degree": 0}
     finally:
-        db.put_connection(conn)
+        if own:
+            db.put_connection(conn)
 
 
 def remove_edges(source_id: Optional[int] = None, target_id: Optional[int] = None) -> int:
@@ -679,14 +680,24 @@ def hybrid_search(query: str, limit: int = 5, workspace_id: Optional[str] = None
     nodes = search_nodes(query, limit=limit, workspace_id=workspace_id, min_score=min_score)
     if not nodes:
         return []
-    for n in nodes:
-        deg = node_degrees(n["id"])
-        n["in_degree"] = deg["in_degree"]
-        n["out_degree"] = deg["out_degree"]
-        links = linked_nodes(n["id"])[:expand]
-        backs = backlinks(n["id"])[:expand]
-        n["linked"] = [{"id": l["id"], "title": l["title"], "edge_type": l["edge_type"]} for l in links]
-        n["backlinked"] = [{"id": b["id"], "title": b["title"], "edge_type": b["edge_type"]} for b in backs]
+    # Hold one pooled connection and reuse it for the per-row enrichment so a
+    # 4-connection pool never gets exhausted by nested acquisitions.
+    conn = db.get_connection()
+    if not conn:
+        return nodes
+    try:
+        for n in nodes:
+            deg = node_degrees(n["id"], conn=conn)
+            n["in_degree"] = deg["in_degree"]
+            n["out_degree"] = deg["out_degree"]
+            links = linked_nodes(n["id"], conn=conn)[:expand]
+            backs = backlinks(n["id"], conn=conn)[:expand]
+            n["linked"] = [{"id": l["id"], "title": l["title"], "edge_type": l["edge_type"]} for l in links]
+            n["backlinked"] = [{"id": b["id"], "title": b["title"], "edge_type": b["edge_type"]} for b in backs]
+    except Exception as e:
+        logger.warning(f"Hybrid enrichment failed: {e}")
+    finally:
+        db.put_connection(conn)
     return nodes
 
 
@@ -714,7 +725,7 @@ def list_nodes(limit: int = 50, node_type: Optional[str] = None,
             rows = cur.fetchall()
         out = []
         for r in rows:
-            deg = node_degrees(r[0])
+            deg = node_degrees(r[0], conn=conn)
             out.append({
                 "id": r[0], "node_type": r[1], "title": r[2],
                 "content": (r[3] or "")[:200], "workspace_id": r[4],
@@ -790,7 +801,8 @@ def shortest_path(start_id: int, end_id: int, max_depth: int = 10) -> Dict[str, 
                            w.route || e.target_id
                     FROM walk w
                     JOIN edges e ON e.source_id = w.target_id
-                    WHERE NOT (e.target_id = ANY(w.route))
+                    WHERE e.edge_type IN ('wikilink','backlink','parent','child','tagged')
+                      AND NOT (e.target_id = ANY(w.route))
                       AND w.depth < %s
                 )
                 SELECT route, depth FROM walk
@@ -806,7 +818,7 @@ def shortest_path(start_id: int, end_id: int, max_depth: int = 10) -> Dict[str, 
         route = list(row[0])
         path = []
         for nid in route:
-            node = get_node(nid)
+            node = get_node(nid, conn=conn)
             if node:
                 path.append(node)
         return {"found": True, "path": path, "depth": row[1]}
