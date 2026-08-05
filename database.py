@@ -340,6 +340,26 @@ def _ensure_schema():
                     timestamp DOUBLE PRECISION NOT NULL
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS agents (
+                    name TEXT PRIMARY KEY,
+                    role TEXT DEFAULT '',
+                    description TEXT DEFAULT '',
+                    system_prompt TEXT NOT NULL,
+                    keywords TEXT DEFAULT '[]',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS skills (
+                    name TEXT PRIMARY KEY,
+                    description TEXT DEFAULT '',
+                    system_prompt TEXT DEFAULT '',
+                    template TEXT NOT NULL,
+                    params TEXT DEFAULT '[]',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
             conn.commit()
             _seed_default_workspace(conn)
         try:
@@ -808,6 +828,8 @@ def db_stats() -> Dict[str, Any]:
         "table_bytes": 0,
         "cache_entries": 0,
         "conversations": 0,
+        "custom_agents": 0,
+        "custom_skills": 0,
         "pool": {"min": 1, "max": CONFIG.db.maxconn, "active": 0},
         "auto_prune": False,
         "prune_interval_hours": CONFIG.prune_interval_hours,
@@ -834,6 +856,10 @@ def db_stats() -> Dict[str, Any]:
             info["agents"] = {r[0]: r[1] for r in cur.fetchall()}
             cur.execute("SELECT COUNT(*) FROM conversations")
             info["conversations"] = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM agents")
+            info["custom_agents"] = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM skills")
+            info["custom_skills"] = cur.fetchone()[0] or 0
             cur.execute("SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'idx_agent_memory_ivfflat'")
             info["ivfflat"] = (cur.fetchone()[0] or 0) > 0
             cur.execute("SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'idx_agent_memory_hnsw'")
@@ -1395,6 +1421,187 @@ def delete_workspace_conversations(workspace_id: str) -> bool:
         except Exception:
             pass
         return False
+    finally:
+        _put_conn(conn)
+
+
+# ---------- DB-backed agents & skills (in-memory/JSON fallback when DB off) ----------
+
+def save_agent(name: str, role: str, description: str, system_prompt: str,
+               keywords: Optional[List[str]] = None) -> bool:
+    """Upsert a user-defined agent into the agents table."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO agents (name, role, description, system_prompt, keywords) "
+                "VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT (name) DO UPDATE SET "
+                "role = EXCLUDED.role, description = EXCLUDED.description, "
+                "system_prompt = EXCLUDED.system_prompt, keywords = EXCLUDED.keywords, "
+                "created_at = NOW()",
+                (name, role, description, system_prompt,
+                 json.dumps(list(keywords or []))),
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Save agent: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def delete_agent(name: str) -> bool:
+    """Remove a user-defined agent row. Returns True if a row was deleted."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM agents WHERE name = %s", (name,))
+            deleted = cur.rowcount > 0
+            conn.commit()
+        return deleted
+    except Exception as e:
+        logger.warning(f"Delete agent: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def load_agents() -> List[Dict[str, Any]]:
+    """Load all user-defined agents from the DB."""
+    conn = _get_conn()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, role, description, system_prompt, keywords "
+                "FROM agents ORDER BY created_at ASC, name ASC"
+            )
+            rows = cur.fetchall()
+        out = []
+        for r in rows:
+            try:
+                keywords = json.loads(r[4]) if r[4] else []
+            except (ValueError, TypeError):
+                keywords = []
+            out.append({
+                "name": r[0],
+                "role": r[1] or "",
+                "description": r[2] or "",
+                "system_prompt": r[3] or "",
+                "keywords": keywords,
+            })
+        return out
+    except Exception as e:
+        logger.warning(f"Load agents: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def save_skill(name: str, description: str, system_prompt: str, template: str,
+               params: Optional[List[Dict[str, Any]]] = None) -> bool:
+    """Upsert a user-defined skill into the skills table."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO skills (name, description, system_prompt, template, params) "
+                "VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT (name) DO UPDATE SET "
+                "description = EXCLUDED.description, system_prompt = EXCLUDED.system_prompt, "
+                "template = EXCLUDED.template, params = EXCLUDED.params, created_at = NOW()",
+                (name, description, system_prompt, template,
+                 json.dumps(params or [])),
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Save skill: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def delete_skill(name: str) -> bool:
+    """Remove a user-defined skill row. Returns True if a row was deleted."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM skills WHERE name = %s", (name,))
+            deleted = cur.rowcount > 0
+            conn.commit()
+        return deleted
+    except Exception as e:
+        logger.warning(f"Delete skill: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def load_skills() -> List[Dict[str, Any]]:
+    """Load all user-defined skills from the DB."""
+    conn = _get_conn()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, description, system_prompt, template, params "
+                "FROM skills ORDER BY created_at ASC, name ASC"
+            )
+            rows = cur.fetchall()
+        out = []
+        for r in rows:
+            try:
+                params = json.loads(r[4]) if r[4] else []
+            except (ValueError, TypeError):
+                params = []
+            out.append({
+                "name": r[0],
+                "description": r[1] or "",
+                "system_prompt": r[2] or "",
+                "template": r[3] or "",
+                "params": params,
+            })
+        return out
+    except Exception as e:
+        logger.warning(f"Load skills: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return []
     finally:
         _put_conn(conn)
 

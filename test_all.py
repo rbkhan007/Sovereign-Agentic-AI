@@ -621,6 +621,21 @@ with mock.patch.object(db_mod, "get_pool", return_value=pool), \
     db_mod.count_memories("hy-mt2")
     check("count_memories agent filter", any(s.startswith("SELECT COUNT(*) FROM agent_memory WHERE agent_name") for s, _ in executed))
 
+    conn.cur.rows = [("custom-a", "Role A", "Desc A", "prompt", '["a","b"]')]
+    ag = db_mod.load_agents()
+    check("load_agents rows", len(ag) == 1 and ag[0]["name"] == "custom-a" and ag[0]["keywords"] == ["a", "b"], f"({ag})")
+    check("save_agent upserts", db_mod.save_agent("custom-a", "Role", "Desc", "prompt", ["a"]) is True)
+    check("save_agent sql", any("INSERT INTO agents" in s for s, _ in executed))
+    check("delete_agent", db_mod.delete_agent("custom-a") is True)
+    check("delete_agent sql", any("DELETE FROM agents" in s for s, _ in executed))
+    conn.cur.rows = [("custom-s", "Desc S", "sys", "template {input}", '[{"name":"language","default":"English"}]')]
+    sk = db_mod.load_skills()
+    check("load_skills rows", len(sk) == 1 and sk[0]["name"] == "custom-s" and sk[0]["params"][0]["name"] == "language", f"({sk})")
+    check("save_skill upserts", db_mod.save_skill("custom-s", "Desc", "sys", "template {input}", []) is True)
+    check("save_skill sql", any("INSERT INTO skills" in s for s, _ in executed))
+    check("delete_skill", db_mod.delete_skill("custom-s") is True)
+    check("delete_skill sql", any("DELETE FROM skills" in s for s, _ in executed))
+
     with mock.patch.object(db_mod, "get_pool", return_value=None):
         check("retrieve with no pool", db_mod.retrieve_similar("no-pool-q") == [])
     with mock.patch.object(db_mod, "get_embedder", return_value=None):

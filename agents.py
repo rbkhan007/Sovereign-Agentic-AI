@@ -22,6 +22,18 @@ _SKILLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
 _LOCK = threading.RLock()
 
 
+def _db():
+    """Return the database module when DB-backed persistence is live, else None.
+    Cheap: checks the pool without attempting a connection."""
+    try:
+        import database as _db_mod
+        if _db_mod.db_ready():
+            return _db_mod
+    except Exception:
+        pass
+    return None
+
+
 def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9_-]+", "-", name.strip().lower()).strip("-") or "item"
 
@@ -318,11 +330,37 @@ def _persist(dirname: str, name: str, data: dict) -> str:
     return path
 
 
+def _load_custom_db(kind: str, registry: Dict[str, dict], builtin: Optional[set] = None):
+    """Hydrate user-defined entries from the DB into the given registry.
+
+    Only runs when the DB is live (pool available). Entries whose name
+    collides with a built-in are skipped so DB rows can never silently
+    replace a built-in persona/skill. DB rows win over stale JSON files.
+    """
+    db = _db()
+    if db is None:
+        return
+    try:
+        rows = db.load_agents() if kind == "agents" else db.load_skills()
+    except Exception:
+        return
+    for data in rows:
+        key = data.get("name")
+        if not key:
+            continue
+        key = key.strip().lower()
+        if builtin and key in builtin:
+            continue
+        registry[key] = data
+
+
 _BUILTIN_AGENTS = set(AGENTS)
 _BUILTIN_SKILLS = set(SKILLS)
 
 _load_custom(_AGENTS_DIR, AGENTS, _BUILTIN_AGENTS)
 _load_custom(_SKILLS_DIR, SKILLS, _BUILTIN_SKILLS)
+_load_custom_db("agents", AGENTS, _BUILTIN_AGENTS)
+_load_custom_db("skills", SKILLS, _BUILTIN_SKILLS)
 
 
 def add_agent(name: str, system_prompt: str, role: str = "",
@@ -345,6 +383,15 @@ def add_agent(name: str, system_prompt: str, role: str = "",
     with _LOCK:
         AGENTS[key] = agent
         _persist(_AGENTS_DIR, key, agent)
+        db = _db()
+        if db is not None:
+            try:
+                db.save_agent(
+                    key, agent["role"], agent["description"],
+                    agent["system_prompt"], agent.get("keywords"),
+                )
+            except Exception:
+                pass
     return agent
 
 
@@ -360,6 +407,12 @@ def delete_agent(name: str) -> bool:
             os.remove(os.path.join(_AGENTS_DIR, _safe_filename(key)))
         except OSError:
             pass
+        db = _db()
+        if db is not None:
+            try:
+                db.delete_agent(key)
+            except Exception:
+                pass
     return True
 
 
@@ -387,6 +440,15 @@ def add_skill(name: str, template: str, system_prompt: str = "",
     with _LOCK:
         SKILLS[key] = skill
         _persist(_SKILLS_DIR, key, skill)
+        db = _db()
+        if db is not None:
+            try:
+                db.save_skill(
+                    key, skill["description"], skill["system_prompt"],
+                    skill["template"], skill.get("params"),
+                )
+            except Exception:
+                pass
     return skill
 
 
@@ -402,4 +464,10 @@ def delete_skill(name: str) -> bool:
             os.remove(os.path.join(_SKILLS_DIR, _safe_filename(key)))
         except OSError:
             pass
+        db = _db()
+        if db is not None:
+            try:
+                db.delete_skill(key)
+            except Exception:
+                pass
     return True

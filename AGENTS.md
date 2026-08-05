@@ -170,14 +170,14 @@ GET  /v1/admin/metrics             # Metrics snapshot + uptime_s + thread count
 run.py              # Unified launcher (full/web/cli/api) + port auto-fallback + --add-model
 config.py           # App configuration (GPU, threads, DB, model paths, CLOUD_PRESETS incl. Claude/Anthropic, GGUF auto-discovery)
 models.py           # Model manager (lazy loading with lazy llama_cpp import, GPU offload, OpenAI fallback, VRAM budget/LRU, per-model worker threads + generation watchdog)
-memory.py           # In-memory conversation manager (workspace-indexed conversations)
-database.py         # pgvector memory (PostgreSQL + sentence-transformers) + workspaces/files layer + auto-creates DB if missing + pgAdmin 4 auto-registration
+memory.py           # In-memory conversation manager (workspace-indexed conversations, DB-backed persistence when pool live)
+database.py         # pgvector memory (PostgreSQL + sentence-transformers) + workspaces/files layer + DB-backed conversations/agents/skills + auto-creates DB if missing + pgAdmin 4 auto-registration
 router.py           # Selection room: classify_task + adaptive Harness scorer (reset/adjust/export/import) + ModelRouter
 hardware.py         # Auto-tune: RAM/VRAM detection (PowerShell fallback), threads, VRAM budget, context caps
 metrics.py          # Thread-safe MetricsCollector (loads, latency, tokens, per-model/task)
 arc.py              # ARC reasoning eval harness (grid encode/parse + accuracy)
 orchestrator.py     # Multi-agent pipeline (Hy-MT2 plans + MiniCPM executes; merges global + workspace-scoped knowledge; web search integration; auto-agentic streaming via auto_stream())
-agents.py           # Agent personas + skills registry: runtime add_agent/add_skill/delete_agent/delete_skill persisted as JSON under agents/ and skills/ (built-ins protected; new entries auto-appear as MCP tools)
+agents.py           # Agent personas + skills registry: runtime add_agent/add_skill/delete_agent/delete_skill persisted as JSON under agents/ and skills/ AND mirrored to PostgreSQL agents/skills tables when the DB is live (built-ins protected; DB rows hydrate over stale JSON at import; new entries auto-appear as MCP tools)
 graph_store.py      # Knowledge graph store on PostgreSQL: nodes/edges/tags tables, vector + graph hybrid search, recursive-CTE shortest path, wiki-link sync, agent_memory -> 'memory' node migration
 wiki_links.py       # Obsidian-style [[wiki-links]], #tags, headings, backlink extraction from markdown uploads
 lora_manager.py     # LoRA adapters: list/load/unload for GGUF, HF-PEFT training (/v1/loras/train), GGUF conversion; CPU-only training with race condition fix
