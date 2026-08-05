@@ -39,6 +39,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className="dark" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
+        <link rel="apple-touch-icon" href="/favicon.svg" />
+        <meta name="theme-color" content="#0F172A" />
       </head>
       <body className={`${inter.variable} font-sans bg-bg-primary text-text-primary transition-colors duration-200`}>
         <ThemeProvider>

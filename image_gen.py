@@ -64,10 +64,12 @@ def _cap(value, low, high, default):
     try:
         v = int(value)
     except (TypeError, ValueError):
-        return default
+        v = default
     if v <= 0:
         # 0/omitted means "use the configured default", not the hard minimum.
-        return default
+        v = default
+    # Clamp the default itself so a misconfigured config value cannot bypass
+    # the documented hardware guards (e.g. width=2048 -> capped to 512).
     return max(low, min(high, v))
 
 

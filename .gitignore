@@ -39,3 +39,17 @@ FULL_LISTING.txt
 
 # Frontend build cache
 frontend/.next/
+frontend/node_modules/
+frontend/build/
+frontend/package-lock.json
+frontend/yarn.lock
+frontend/tsconfig.tsbuildinfo
+
+# Test data / artifacts
+Training Folder/
+tests/test_data/
+
+# IDE / editor
+*.swp
+*.swo
+*~

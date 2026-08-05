@@ -80,12 +80,12 @@ def _load_model():
             )
         c = getattr(CONFIG, "vision", {}) or {}
         model_id = c.get("model", _MODEL_ID_DEFAULT)
-        from transformers import AutoModelForCausalLM, AutoProcessor  # noqa: PLC0415
-        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
+        from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: PLC0415
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
         model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
         model.to("cpu")
         model.eval()
-        _vision_processor = processor
+        _vision_processor = tokenizer
         _vision_model = model
         _vision_loaded = True
 
@@ -122,7 +122,6 @@ def analyze_image(image: bytes, prompt: str = "Describe this image in detail.") 
         raise ValueError("image data is required")
     if not _deps_available():
         raise ValueError("Vision unavailable: install transformers + torch (pip install transformers torch)")
-    _load_model()
     import PIL.Image  # noqa: PLC0415
     from io import BytesIO  # noqa: PLC0415
     try:
@@ -130,14 +129,11 @@ def analyze_image(image: bytes, prompt: str = "Describe this image in detail.") 
     except Exception as e:
         raise ValueError(f"Could not decode image: {e}") from e
     img.thumbnail((1024, 1024))
-    c = getattr(CONFIG, "vision", {}) or {}
-    max_tokens = int(c.get("max_tokens", 200))
+    _load_model()
     start = time.time()
     try:
         with _VISION_LOCK:
-            inputs = _vision_processor(text=prompt, images=img, return_tensors="pt")
-            output = _vision_model.generate(**inputs, max_new_tokens=max_tokens, do_sample=False)
-            answer = _vision_processor.decode(output[0], skip_special_tokens=True)
+            answer = _vision_model.answer_question(img, prompt, _vision_processor)
     except Exception as e:
         release()
         raise RuntimeError(f"Vision inference failed: {e}") from e

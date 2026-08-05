@@ -695,15 +695,6 @@ class AgentResult:
     final_answer: str
     steps: List[AgentStep]
     total_elapsed_s: float = 0.0
-    tokens_used: int = 0
-
-    def summary(self) -> str:
-        lines = [
-            f"Agent completed in {self.total_elapsed_s:.1f}s with {len(self.steps)} steps",
-            f"Result: {'SUCCESS' if self.success else 'FAILED'}",
-            f"\n{self.final_answer}",
-        ]
-        return "\n".join(lines)
 
 
 class ComputerAgent:

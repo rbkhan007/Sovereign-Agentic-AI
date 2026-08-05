@@ -1,10 +1,12 @@
 export function getApiBase(): string {
   if (typeof window !== 'undefined') {
-    const override = (window as unknown as Record<string, string | undefined>).NEXT_PUBLIC_API_BASE;
-    if (override) return override.replace(/\/$/, '');
+    const runtimeOverride = (window as unknown as Record<string, string | undefined>).NEXT_PUBLIC_API_BASE;
+    if (runtimeOverride) return runtimeOverride.replace(/\/$/, '');
+    const envBase = process.env.NEXT_PUBLIC_API_BASE;
+    if (envBase) return envBase.replace(/\/$/, '');
     return window.location.origin;
   }
-  return '';
+  return process.env.NEXT_PUBLIC_API_BASE || '';
 }
 
 export async function api(path: string, options: RequestInit = {}, timeout = 60000, signal?: AbortSignal): Promise<Response> {

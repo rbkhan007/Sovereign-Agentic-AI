@@ -578,12 +578,25 @@ def ensure_tag(tag: str, metadata: Optional[dict] = None) -> Optional[int]:
         db.put_connection(conn)
 
 
+def _ensure_tag_node(tag: str) -> Optional[int]:
+    """Get-or-create a graph node of type 'tag'.
+
+    Edges.source_id/target_id have a FK to nodes(id); the separate `tags`
+    table uses its own sequence, so a tag id must never be used as an edge
+    endpoint. We materialise each tag as a real node and link that instead.
+    """
+    existing = find_node_by_title("tag", tag, "default")
+    if existing is not None:
+        return existing
+    return create_node("tag", tag, content=f"# {tag}", metadata={"source": "tags_table"})
+
+
 def tag_node(node_id: int, tag: str) -> bool:
-    """Link a tag to a content node via a 'tagged' edge (tags table backed)."""
-    tag_id = ensure_tag(tag)
-    if tag_id is None:
+    """Link a tag to a content node via a 'tagged' edge (tag = real node)."""
+    tag_node_id = _ensure_tag_node(tag)
+    if tag_node_id is None:
         return False
-    return add_edge(tag_id, node_id, "tagged")
+    return add_edge(tag_node_id, node_id, "tagged")
 
 
 # --------------------------------------------------------------------------

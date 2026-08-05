@@ -206,12 +206,13 @@ def train_lora(
         return None
 
     try:
-        import torch
-        has_cuda = torch.cuda.is_available()
-    except ImportError:
-        has_cuda = False
+        try:
+            import torch
+            has_cuda = torch.cuda.is_available()
+        except Exception as e:
+            logger.error(f"torch unavailable, cannot train LoRA: {e}")
+            return None
 
-    try:
         logger.info(f"Training LoRA adapter '{output_name}' on {base_model} (device: {'cuda' if has_cuda else 'cpu'})")
 
         tokenizer = AutoTokenizer.from_pretrained(base_model)  # nosec B615
@@ -266,6 +267,7 @@ def train_lora(
         tokenizer.save_pretrained(output_dir)
 
         logger.info(f"LoRA adapter '{output_name}' training complete -> {output_dir}")
+        register_adapter(LoRAAdapter(name=output_name, path=output_dir, base_model=base_model, enabled=True))
         return output_dir
     finally:
         _TRAIN_LOCK.release()

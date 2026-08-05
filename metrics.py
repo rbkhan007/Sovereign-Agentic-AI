@@ -78,7 +78,11 @@ class MetricsCollector:
             for n, d in self.models.items():
                 row = dict(d)
                 row["avg_latency"] = round(d["latency_sum"] / d["latency_n"], 3) if d["latency_n"] else 0.0
-                row["success_rate"] = round(1.0 - (d["errors"] / d["requests"]), 3) if d["requests"] else 1.0
+                if d["requests"]:
+                    sr = max(0.0, min(1.0, round(1.0 - (d["errors"] / d["requests"]), 3)))
+                else:
+                    sr = 1.0
+                row["success_rate"] = sr
                 per_model[n] = row
             per_task = {n: dict(d) for n, d in self.tasks.items()}
             return {

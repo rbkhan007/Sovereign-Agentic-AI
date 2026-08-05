@@ -344,14 +344,29 @@ def create_web_app(api_app: FastAPI) -> FastAPI:
         '<circle cx="32" cy="39" r="7" fill="#0b1020"/></svg>'
     )
 
-    @api_app.get("/favicon.ico", include_in_schema=False)
-    @api_app.get("/favicon.svg", include_in_schema=False)
-    async def favicon():
+    _PUBLIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "public")
+
+    def _serve_public_asset(name: str, fallback: str = "") -> Response:
+        path = os.path.join(_PUBLIC_DIR, name)
+        if os.path.isfile(path):
+            with open(path, "rb") as fh:
+                data = fh.read()
+        else:
+            data = (fallback or FAVICON_SVG).encode("utf-8")
         return Response(
-            content=FAVICON_SVG,
+            content=data,
             media_type="image/svg+xml",
             headers={"Cache-Control": "public, max-age=86400"},
         )
+
+    @api_app.get("/favicon.ico", include_in_schema=False)
+    @api_app.get("/favicon.svg", include_in_schema=False)
+    async def favicon():
+        return _serve_public_asset("favicon.svg")
+
+    @api_app.get("/logo.svg", include_in_schema=False)
+    async def logo_svg():
+        return _serve_public_asset("logo.svg", FAVICON_SVG)
 
     @api_app.get("/chat", include_in_schema=False)
     @api_app.get("/", include_in_schema=False)

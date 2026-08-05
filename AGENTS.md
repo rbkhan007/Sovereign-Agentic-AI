@@ -39,6 +39,8 @@ python run.py --vision           # Enable local image understanding via moondrea
 python run.py --vision-model NAME # Vision model id (default vikhyat/moondream2; env LLM_VISION / LLM_VISION_MODEL)
 python run.py --automl          # Enable local AutoML (auto-sklearn) data-science agent (Linux-only, opt-in)
 python run.py --automl-model-dir DIR # Directory to save trained AutoML models (default generated/automl_models)
+python run.py --healing          # Enable the self-healing diagnostic agent (diagnoses + fixes Python code)
+python run.py --allow-unsafe-healing  # PERMIT healing to execute caller-supplied Python (RCE risk; only with --healing)
 python run.py --no-auto-tune     # Disable hardware auto-tune
 python run.py --no-auto-load     # Disable selection-room preloading
 python run.py --add-model PATH --add-model-name NAME --add-model-role Executor  # Register extra GGUF at runtime
@@ -99,6 +101,8 @@ GET  /v1/vision/config           # Vision config (moondream2, CPU-only, opt-in)
 POST /v1/vision/analyze          # {image(base64 or data URI), prompt?} -> {description, elapsed_s}
 GET  /v1/datascience/config      # AutoML config (auto-sklearn, CPU-only, Linux-only, opt-in)
 POST /v1/datascience/train       # {csv_text, target_column, task_type(classification|regression), time_limit} -> {model_path, score, leaderboard}
+GET  /v1/healing/config          # Self-healing agent configuration
+POST /v1/healing/run            # {code, context?, timeout_s?} -> {success, output, attempts, final_code}
 GET  /v1/system                  # System info incl. hardware + metrics
 GET  /v1/metrics                 # Runtime metrics (per model / per task)
 GET  /v1/router/stats            # Adaptive harness fitness scores

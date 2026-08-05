@@ -126,6 +126,7 @@ class AppConfig:
     })
     healing: dict = field(default_factory=lambda: {
         "enabled": False,
+        "allow_unsafe": False,
         "max_retries": 2,
         "timeout_s": 30,
         "diagnostician_model": "hy-mt2",
@@ -245,8 +246,6 @@ class AppConfig:
             self.automl["time_limit"] = int(os.environ["LLM_AUTOML_TIME_LIMIT"].strip())
         if os.environ.get("LLM_HEALING", "").strip().lower() in ("1", "true", "yes", "on"):
             self.healing["enabled"] = True
-        if os.environ.get("LLM_AUTOML_TIME_LIMIT", "").strip().isdigit():
-            self.automl["time_limit"] = int(os.environ["LLM_AUTOML_TIME_LIMIT"].strip())
         if not self.lora_dir:
             self.lora_dir = os.path.join(BASE_DIR, "loras")
         if os.environ.get("PGHOST", "").strip():

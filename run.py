@@ -289,6 +289,10 @@ def main():
                         help="Enable local AutoML (auto-sklearn) data-science agent (Linux-only, opt-in)")
     parser.add_argument("--automl-model-dir", metavar="DIR",
                         help="Directory to save trained AutoML models (default generated/automl_models)")
+    parser.add_argument("--healing", action="store_true",
+                        help="Enable the self-healing diagnostic agent (diagnoses + fixes Python code)")
+    parser.add_argument("--allow-unsafe-healing", action="store_true",
+                        help="PERMIT the healing agent to execute caller-supplied Python (RCE risk; local opt-in only)")
 
     args = parser.parse_args()
     from config import CONFIG
@@ -382,6 +386,12 @@ def main():
         logger.info("AutoML enabled (auto-sklearn, Linux-only, CPU, resource-safe)")
     if args.automl_model_dir:
         CONFIG.automl["model_dir"] = args.automl_model_dir
+    if args.healing:
+        CONFIG.healing["enabled"] = True
+        logger.info("Self-healing diagnostic agent enabled")
+    if args.allow_unsafe_healing:
+        CONFIG.healing["allow_unsafe"] = True
+        logger.warning("Healing agent MAY EXECUTE caller-supplied Python (--allow-unsafe-healing)")
     if args.web_search:
         CONFIG.web_search_enabled = True
         logger.info("Web search enabled (DuckDuckGo)")
@@ -440,6 +450,7 @@ def main():
         time.sleep(1)
     else:
         args.port = resolve_port(args.port)
+        CONFIG.port = args.port
 
     if CONFIG.db.enabled:
         try:

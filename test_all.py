@@ -737,14 +737,15 @@ def _reset_graph_state():
     _gconn.rolled_back = 0
     gs._SCHEMA_DONE.clear()
 
-def _run_sql(sql):
+def _run_sql(sql, params=None):
     sql = sql if isinstance(sql, str) else sql.decode("utf-8")
+    is_tag = bool(params) and params[0] == "tag"
     if "INSERT INTO nodes" in sql:
-        _gconn.cur.rows = [(99,)]
-        return 99
+        _gconn.cur.rows = [(88,)] if is_tag else [(99,)]
+        return 88 if is_tag else 99
     if "SELECT id FROM nodes" in sql:
-        _gconn.cur.rows = [(99,)]
-        return 99
+        _gconn.cur.rows = [(88,)] if is_tag else [(99,)]
+        return 88 if is_tag else 99
     if "INSERT INTO tags" in sql:
         _gconn.cur.rows = [(77,)]
         return 77
@@ -775,7 +776,7 @@ def _run_sql(sql):
     _gconn.cur.rows = []
     return None
 
-_gconn.cur.execute = lambda sql, params=None: (_run_sql(sql), _exec2.append((sql, params)))[1]
+_gconn.cur.execute = lambda sql, params=None: (_run_sql(sql, params), _exec2.append((sql, params)))[1]
 _gconn.cur.fetchone = lambda: _gconn.cur.rows[0] if _gconn.cur.rows else None
 _gconn.cur.fetchall = lambda: _gconn.cur.rows
 

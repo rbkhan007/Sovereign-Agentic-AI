@@ -319,6 +319,8 @@ class Orchestrator:
             try:
                 result = self._call_openai(conv, model, max_tokens=max_tokens)
                 yield {"type": "response", "content": result["response"]}
+                yield {"type": "done", "model": model,
+                       "tokens": len(result["response"].split()), "elapsed": 0.0}
                 return
             except Exception:
                 conv.messages.pop()
@@ -433,6 +435,10 @@ class Orchestrator:
             except Exception:
                 logger.warning("Memory store failed (stream)", exc_info=True)
 
+        yield {"type": "done", "model": exec_model,
+               "tokens": len(response.split()),
+               "elapsed": round(_time.time() - gen_start, 3)}
+
     def _should_auto_stream(self, user_message: str, use_planning: bool,
                             max_tokens: Optional[int] = None) -> bool:
         """Auto-detect whether streaming is appropriate for this request.
@@ -482,6 +488,9 @@ class Orchestrator:
         """
         if sandbox is None:
             sandbox = bool(getattr(CONFIG, "sandbox", False))
+        # Apply the documented hard cap for auto-streamed requests.
+        if max_tokens is None or max_tokens > CONFIG.auto_stream_max_tokens:
+            max_tokens = CONFIG.auto_stream_max_tokens
         if not self._should_auto_stream(user_message, use_planning, max_tokens):
             yield {"type": "start", "model": model_override or self.executor}
             start = _time.time()

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Activity, MessageSquare, FolderOpen, Database, Cpu, Wrench, Shield, Settings, HelpCircle, Sun, Moon, ChevronLeft, ChevronRight, Wifi, WifiOff, X, GitBranch, type LucideIcon } from 'lucide-react';
+import { Activity, MessageSquare, FolderOpen, Database, Cpu, Wrench, Shield, Settings, HelpCircle, Sun, Moon, ChevronLeft, ChevronRight, Wifi, WifiOff, X, GitBranch, Menu, type LucideIcon } from 'lucide-react';
 import { useTheme } from '@/components/ThemeProvider';
 import { useSidebar } from '@/components/SidebarProvider';
 import { fetchJSON } from '@/lib/api';
@@ -76,14 +76,14 @@ export default function Sidebar() {
         <div className="flex items-center gap-2.5">
           {!collapsed ? (
             <>
-              <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-accent to-accent-2 flex items-center justify-center text-white text-sm font-bold shadow-lg shadow-accent/30 shrink-0">A</span>
+              <img src="/logo.svg" alt="Sovereign-Agentic-AI" className="w-9 h-9 object-contain shrink-0" />
               <div className="min-w-0">
                 <h1 className="text-sm font-bold tracking-tight gradient-text truncate">Agentic LLM</h1>
                 <p className="text-[10px] text-text-muted">Local · Fast · Private</p>
               </div>
             </>
           ) : (
-            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-accent to-accent-2 flex items-center justify-center text-white text-sm font-bold shadow-lg shadow-accent/30 mx-auto">A</span>
+            <img src="/logo.svg" alt="Sovereign-Agentic-AI" className="w-9 h-9 object-contain mx-auto shrink-0" />
           )}
         </div>
       </div>
@@ -163,6 +163,17 @@ export default function Sidebar() {
 
   return (
     <>
+      {/* Mobile menu trigger (only when the drawer is closed) */}
+      {!mobileOpen && (
+        <button
+          onClick={() => setMobileOpen(true)}
+          className="lg:hidden fixed top-3 left-3 z-30 p-2 rounded-lg bg-bg-secondary/80 backdrop-blur border border-border text-text-primary hover:text-text-accent transition-colors"
+          aria-label="Open menu"
+        >
+          <Menu size={20} />
+        </button>
+      )}
+
       {/* Desktop sidebar */}
       <aside className={`hidden lg:flex relative bg-bg-secondary/70 backdrop-blur-lg border-r border-border flex-col transition-all duration-300 ${collapsed ? 'w-16' : 'w-64'}`}>
         {sidebarContent}

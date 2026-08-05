@@ -777,6 +777,9 @@ def db_stats() -> Dict[str, Any]:
         "auto_prune": False,
         "prune_interval_hours": CONFIG.prune_interval_hours,
         "prune_max_age_days": CONFIG.prune_max_age_days,
+        "host": CONFIG.db.host,
+        "port": CONFIG.db.port,
+        "database": CONFIG.db.database,
     }
     with _cache_lock:
         info["cache_entries"] = len(_query_cache)

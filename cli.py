@@ -182,6 +182,7 @@ _COMMANDS = [
     "/parallel", "/context", "/temperature", "/max", "/timeout", "/tokens",
     "/save", "/load", "/sessions",
     "/openai", "/cloud", "/db", "/prune", "/exec", "/lora",
+    "/mcp", "/temp", "/shell", "/max-tokens",
 ]
 
 _ALWAYS_ALLOWED = ("/help", "/?", "/exit", "/quit", "/status")
@@ -1897,7 +1898,7 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
                 else:
                     print("LoRA import failed")
         elif sub == "train":
-            if len(parts) < 4:
+            if len(parts) < 5:
                 print("Usage: /lora train <base_model> <dataset.txt> <output_name> [epochs]")
             else:
                 from lora_manager import train_lora
@@ -1905,7 +1906,7 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
                     epochs = int(parts[5]) if len(parts) > 5 else 3
                 except ValueError:
                     epochs = 3
-                out_name = parts[4] if len(parts) > 4 else parts[3]
+                out_name = parts[4]
                 out = train_lora(parts[2], parts[3], out_name, epochs=epochs)
                 if out:
                     print(f"LoRA trained: {out}")
@@ -1993,7 +1994,7 @@ def main():
         if not line.strip():
             continue
 
-        if line.startswith("!"):
+        if line.startswith("!") and not line.startswith("!!"):
             _run_shell(line[1:])
             continue
 

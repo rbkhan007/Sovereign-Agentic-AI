@@ -46,6 +46,8 @@ MODULE_NOTES = {
     "test_all.py": "Offline test suite (no model/DB loads).",
     "test_system.py": "Live integration tests against a running server.",
     "test_load.py": "Load/balance stress tool.",
+    "data_science_agent.py": "Local Auto-Sklearn AutoML data-science agent (Linux-only, opt-in).",
+    "healing_agent.py": "Self-healing diagnostic agent: sandboxed execution + LLM diagnosis/fix.",
     "frontend/": "Next.js 14 + Tailwind CSS modern UI: dashboard, chat, workspace, models, admin pages.",
 }
 

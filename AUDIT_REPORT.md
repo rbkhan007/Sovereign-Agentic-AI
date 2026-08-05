@@ -4,11 +4,12 @@
 - **Python files checked**: 18 source files + 3 test/launcher files
 - **Syntax errors**: 0
 - **Frontend files checked**: 10 TSX pages + configs + components + lib
-- **Overall health**: Clean — all Python/API/frontend issues resolved
+- **Overall health**: Clean — first-pass Python/API/frontend issues resolved
+- **Second audit pass (v1.0.0 hardening)**: completed — see "Second Pass Corrections" below
 
 ---
 
-## Status: ALL ISSUES RESOLVED
+## Status: v1.0.0 READY (blockers fixed; non-critical items deferred to v1.1.0)
 
 This report consolidates findings from the full static audit and deep verification pass.
 
@@ -37,7 +38,36 @@ This report consolidates findings from the full static audit and deep verificati
 | 20 | `httptools` probe crashed when unavailable | Fixed: `importlib.util.find_spec("httptools")` in `api.py`/`run.py` |
 
 ### Remaining Items
-- None
+The four security/correctness blockers from the second pass are **fixed**. Lower-risk
+items (orchestrator RAG/streaming, hardware monitor, CLI double-load/TUI, router harness
+exploration, metrics/agents/image_gen minors) are tracked in `KNOWN_ISSUES.md` and
+deferred to v1.1.0.
+
+---
+
+## Second Pass Corrections (v1.0.0 hardening)
+
+A full second audit (offline suite + per-module review) found and fixed the following:
+
+| # | File | Issue | Resolution |
+|---|------|-------|-----------|
+| S1 | `graph_store.py` | `tag_node()` inserted `tags.id` into `edges.source_id` (FK → `nodes(id)`) → referential-integrity corruption / silent collision | Added `_ensure_tag_node()`; tags are now first-class `nodes` (`node_type='tag'`) and linked node→node |
+| S2 | `healing_agent.py`, `config.py`, `run.py` | `heal()` executed arbitrary caller Python with no gate (RCE if exposed) | `heal()` refuses to run code unless `CONFIG.healing["allow_unsafe"]`; added `--allow-unsafe-healing` flag (separate from `--healing`) |
+| S3 | `web_ui.py` | `/generated` served uploaded `.html`/`.svg` inline from app origin → stored XSS / `API_TOKEN` exfil | Replaced `StaticFiles` with `SafeStaticFiles`: `X-Content-Type-Options: nosniff` + `Content-Disposition: attachment` for inline-dangerous types |
+| S4 | `vision.py` | moondream2 used non-existent `AutoProcessor`/`model.generate()` API → feature silently broken | Switched to `AutoModelForCausalLM` + `AutoTokenizer` + `model.answer_question(img, prompt, tokenizer)` |
+| S5 | `data_science_agent.py` | Training lock leaked on empty-csv/target early returns; missing `autosklearn.classification`/`.regression` imports; leaderboard serialized as column names | Moved validation before lock acquire (acquire inside `try`); added submodule imports; `leaderboard.to_dict(orient="records")` |
+| S6 | `lora_manager.py` | `import torch` outside `try` leaked train lock on OSError; trained adapter never registered | Moved torch import inside `try`; `register_adapter()` after training |
+| S7 | `run.py` | `--healing` documented but not registered in argparse | Added `--healing` + `--allow-unsafe-healing` flags and wiring |
+| S8 | `config.py` | Duplicated `LLM_AUTOML_TIME_LIMIT` env block | Removed duplicate |
+| S9 | `cli.py` | `!!` retry shortcut unreachable (intercepted by `!` shell branch) | Excluded `!!` from the shell guard |
+| S10 | `computer_agent.py` | Dead `AgentResult.tokens_used` field + `summary()` method (never used) | Removed both |
+| S11 | `frontend/lib/api.ts` | `--nextjs` dev mode couldn't reach API (`window.NEXT_PUBLIC_API_BASE` never set) | Falls back to `process.env.NEXT_PUBLIC_API_BASE` then `window.location.origin` |
+| S12 | `database.py` | `db_stats()` omitted `host`/`port`/`database` → DB page connection line never rendered | Added the three fields |
+| S13 | `frontend/components/layout/Sidebar.tsx` | Mobile drawer had no opener → nav unusable on `lg:hidden` | Added `Menu` hamburger trigger |
+| S14 | `.gitignore` | `"Training Folder/"` had literal quotes → pattern never matched; 12,633 `node_modules` files staged | Fixed pattern; unstaged `node_modules`, fonts, lockfiles |
+
+Git hygiene: `frontend/node_modules`, `Training Folder/` (fonts), `tsconfig.tsbuildinfo`,
+and `package-lock.json` are now correctly ignored; 98 legitimate source files remain staged.
 
 ---
 
@@ -45,7 +75,7 @@ This report consolidates findings from the full static audit and deep verificati
 
 | Check | Result |
 |-------|--------|
-| Unit tests | 560 / 560 passed |
+| Unit tests | 703 / 703 passed |
 | TypeScript compilation | PASS (10/10 pages) |
 | Pylint | PASS |
 | Mypy | PASS |

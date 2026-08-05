@@ -1,7 +1,7 @@
 # Sovereign-Agentic-AI
 
 <p align="center">
-  <img src="frontend/public/favicon.ico" width="64" height="64" alt="logo"/>
+  <img src="frontend/public/logo.svg" width="112" height="112" alt="Sovereign-Agentic-AI logo"/>
 </p>
 
 <p align="center">

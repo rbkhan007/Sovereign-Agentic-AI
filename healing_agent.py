@@ -160,6 +160,13 @@ DIAGNOSIS:
         current = code
         err = ""
         try:
+            if not getattr(CONFIG, "healing", {}).get("allow_unsafe"):
+                return {
+                    "success": False,
+                    "error": ("Healing code execution is disabled for safety. "
+                              "Restart with --allow-unsafe-healing to permit the "
+                              "agent to run caller-supplied Python."),
+                }
             rc, out, err = self._exec_subprocess(code, timeout)
             if rc == 0:
                 self._log_attempt({"success": True, "final_code": code})

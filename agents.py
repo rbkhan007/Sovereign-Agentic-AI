@@ -139,6 +139,19 @@ AGENTS: Dict[str, dict] = {
         ),
         "keywords": ["csv", "data", "predict", "model", "automl", "analyze", "train"],
     },
+    "healer": {
+        "name": "healer",
+        "role": "Self-Healing Agent",
+        "description": "Diagnoses and repairs broken Python snippets and data pipelines automatically.",
+        "system_prompt": (
+            "You are an autonomous self-healing agent. "
+            "When provided with a Python script that fails, you analyze the error, "
+            "diagnose the root cause, and attempt to apply a fix. "
+            "You can also fix CSV parsing issues by suggesting new parameters. "
+            "Always explain your reasoning before applying a fix."
+        ),
+        "keywords": ["debug", "fix", "repair", "error", "csv", "pandas"],
+    },
 }
 
 DEFAULT_AGENT = "general"
@@ -263,7 +276,7 @@ def render_skill(name: str, input_text: str, params: Optional[dict] = None) -> O
         fill[p["name"]] = (params or {}).get(p["name"], p.get("default", ""))
     try:
         prompt = skill["template"].format(input=input_text, **fill)
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, IndexError):
         prompt = skill["template"].replace("{input}", input_text)
     return {
         "name": skill["name"],

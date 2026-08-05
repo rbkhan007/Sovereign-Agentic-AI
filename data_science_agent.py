@@ -123,14 +123,6 @@ class DataScienceAgent:
         if not self.check_hardware_safety():
             return {"error": "Insufficient free RAM (< 3 GB). Please free memory and try again."}
 
-        if not _TRAINING_LOCK.acquire(timeout=1):
-            return {"error": "Another AutoML training job is already running. Please wait."}
-
-        cfg = {
-            "time_limit": time_limit,
-            "n_jobs": int((getattr(CONFIG, "automl", {}) or {}).get("n_jobs", 2)),
-            "memory_limit": int((getattr(CONFIG, "automl", {}) or {}).get("memory_limit_mb", 4096)),
-        }
         csv_text = csv_text.strip()
         target_column = (target_column or "").strip()
         if not csv_text:
@@ -138,12 +130,22 @@ class DataScienceAgent:
         if not target_column:
             return {"error": "target_column is required"}
 
+        cfg = {
+            "time_limit": time_limit,
+            "n_jobs": int((getattr(CONFIG, "automl", {}) or {}).get("n_jobs", 2)),
+            "memory_limit": int((getattr(CONFIG, "automl", {}) or {}).get("memory_limit_mb", 4096)),
+        }
+
         csv_path = None
         automl = None
         start = time.time()
         try:
+            if not _TRAINING_LOCK.acquire(timeout=1):
+                return {"error": "Another AutoML training job is already running. Please wait."}
             import pandas as pd  # noqa: PLC0415
             import autosklearn  # noqa: PLC0415
+            import autosklearn.classification  # noqa: PLC0415
+            import autosklearn.regression  # noqa: PLC0415
             import joblib  # noqa: PLC0415
 
             with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as fh:
@@ -190,7 +192,7 @@ class DataScienceAgent:
             try:
                 leaderboard = automl.leaderboard()
                 if leaderboard is not None:
-                    leaderboard = list(leaderboard)
+                    leaderboard = leaderboard.to_dict(orient="records")
             except Exception:
                 leaderboard = []
 
