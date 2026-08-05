@@ -30,11 +30,92 @@ _reindex_lock = Lock()
 _seq_count_lock = Lock()
 
 
+def embed_dim() -> int:
+    """Configured embedding dimension (drives the vector(N) schema)."""
+    return int(CONFIG.embedder.get("dimension", 384))
+
+
+class _RemoteEmbedder:
+    """Minimal OpenAI-compatible embeddings client (no SDK dependency).
+
+    Calls POST {base_url}/embeddings with {'model', 'input'} and returns a
+    list of vectors. Mirrors the sentence-transformers encode() surface used
+    elsewhere: encode(text) -> ndarray-like with .tolist().
+    """
+
+    def __init__(self, model: str, api_key: str, base_url: str, dimension: int):
+        self.model = model
+        self.api_key = api_key
+        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self.dimension = dimension
+
+    def _post(self, inputs) -> List[List[float]]:
+        import urllib.request
+        import urllib.error
+        payload = json.dumps({"model": self.model, "input": inputs}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/embeddings",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310
+            data = json.loads(resp.read().decode("utf-8"))
+        items = sorted(data.get("data", []), key=lambda x: x.get("index", 0))
+        vecs = [item.get("embedding") or [] for item in items]
+        return [v[: self.dimension] if len(v) > self.dimension else v for v in vecs]
+
+    def encode(self, texts, normalize_embeddings=True):
+        single = isinstance(texts, str)
+        inputs = [texts] if single else list(texts)
+        if not inputs:
+            vecs: List[List[float]] = []
+        else:
+            vecs = self._post(inputs)
+        if normalize_embeddings:
+            vecs = [_l2_normalize(v) for v in vecs]
+        import array
+        if single:
+            return array.array("f", vecs[0]) if vecs else array.array("f", [0.0] * self.dimension)
+        return [array.array("f", v) for v in vecs]
+
+
+def _l2_normalize(v: List[float]) -> List[float]:
+    norm = (sum(x * x for x in v) or 0.0) ** 0.5
+    if norm == 0.0:
+        return v
+    return [x / norm for x in v]
+
+
+def reset_embedder():
+    """Drop the cached embedder so the next get_embedder() rebuilds it from
+    current CONFIG.embedder settings (provider/model/dimension switch)."""
+    global _embedder
+    with _embedder_lock:
+        _embedder = None
+
+
 def get_embedder():
     global _embedder
     if _embedder is None:
         with _embedder_lock:
             if _embedder is None:
+                provider = (CONFIG.embedder.get("provider") or "local").strip().lower()
+                if provider != "local":
+                    try:
+                        _embedder = _RemoteEmbedder(
+                            model=CONFIG.embedder.get("model") or "text-embedding-3-small",
+                            api_key=CONFIG.embedder.get("api_key") or "",
+                            base_url=CONFIG.embedder.get("base_url") or "",
+                            dimension=embed_dim(),
+                        )
+                        logger.info(f"Remote embedder ready: {CONFIG.embedder.get('model')} ({embed_dim()}d)")
+                        return _embedder
+                    except Exception as e:
+                        logger.warning(f"Remote embedder init failed: {e}")
                 try:
                     from sentence_transformers import SentenceTransformer
                     _device = "cpu"
@@ -44,7 +125,7 @@ def get_embedder():
                             _device = "cuda"
                     except ImportError:
                         pass
-                    _embedder = SentenceTransformer("all-MiniLM-L6-v2", device=_device)
+                    _embedder = SentenceTransformer(CONFIG.embedder.get("model") or "all-MiniLM-L6-v2", device=_device)
                     logger.info(f"Embedding model loaded on {_device}")
                 except Exception as e:
                     logger.warning(f"Embedding model failed: {e}")
@@ -284,6 +365,37 @@ def _register_pgadmin_connection():
             logger.debug(f"pgAdmin 4 registration skipped ({path}): {e}")
 
 
+def _migrate_vector_dim(conn):
+    """Best-effort migration of the agent_memory.embedding column to the
+    configured dimension. Drops + recreates the vector index when the column
+    type changes. Never fails the schema setup (logged + skipped)."""
+    target = embed_dim()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT format_type(a.atttypid, a.atttypmod) FROM pg_attribute a "
+                "JOIN pg_class c ON c.oid = a.attrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE c.relname = 'agent_memory' AND a.attname = 'embedding' "
+                "AND n.nspname = 'public'"
+            )
+            row = cur.fetchone()
+            if not row or not row[0]:
+                return
+            current = str(row[0])
+            expected = f"vector({target})"
+            if current == expected:
+                return
+            logger.warning(f"Vector dim mismatch: column {current}, config {expected}; migrating")
+            for idx in ("idx_agent_memory_ivfflat", "idx_agent_memory_hnsw"):
+                cur.execute(f"DROP INDEX IF EXISTS {idx}")
+            cur.execute(f"ALTER TABLE agent_memory ALTER COLUMN embedding TYPE vector({target})")
+            conn.commit()
+            logger.info(f"agent_memory.embedding migrated to vector({target})")
+    except Exception as e:
+        logger.warning(f"Vector dim migration skipped: {e}")
+
+
 def _ensure_schema():
     global _ivfflat_attempted
     conn = _get_conn()
@@ -296,12 +408,14 @@ def _ensure_schema():
                     id BIGSERIAL PRIMARY KEY,
                     agent_name TEXT NOT NULL DEFAULT 'default',
                     thought TEXT NOT NULL,
-                    embedding vector(384),
+                    embedding vector(%s),
                     tokens INT DEFAULT 0,
                     metadata JSONB DEFAULT '{}'::jsonb,
+                    workspace_id TEXT DEFAULT 'default',
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
-            """)
+            """, (embed_dim(),))
+            _migrate_vector_dim(conn)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS workspaces (
                     id TEXT PRIMARY KEY,
@@ -360,6 +474,24 @@ def _ensure_schema():
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    name TEXT DEFAULT '',
+                    user_id TEXT DEFAULT '',
+                    metadata JSONB DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    last_active_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS metrics_snapshots (
+                    id BIGSERIAL PRIMARY KEY,
+                    taken_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    snapshot JSONB NOT NULL
+                );
+            """)
             conn.commit()
             _seed_default_workspace(conn)
         try:
@@ -380,6 +512,12 @@ def _ensure_schema():
                 EXCEPTION WHEN duplicate_column THEN NULL;
                 END $$;
             """)
+            cur.execute("""
+                DO $$ BEGIN
+                    ALTER TABLE agent_memory ADD COLUMN IF NOT EXISTS workspace_id TEXT DEFAULT 'default';
+                EXCEPTION WHEN duplicate_column THEN NULL;
+                END $$;
+            """)
             conn.commit()
         with conn.cursor() as cur:
             cur.execute("""
@@ -389,6 +527,10 @@ def _ensure_schema():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_agent_memory_created
                 ON agent_memory (created_at DESC);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_agent_memory_ws
+                ON agent_memory (workspace_id, created_at DESC);
             """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_workspace_files_ws
@@ -401,6 +543,14 @@ def _ensure_schema():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_conversations_ws
                 ON conversations (workspace_id);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_sessions_user
+                ON sessions (user_id, updated_at DESC);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_metrics_snapshots_taken
+                ON metrics_snapshots (taken_at DESC);
             """)
             conn.commit()
         if not _ivfflat_attempted:
@@ -547,7 +697,8 @@ def _put_conn(conn):
                 pass
 
 
-def store_thought(agent: str, thought: str, metadata: Optional[dict] = None):
+def store_thought(agent: str, thought: str, metadata: Optional[dict] = None,
+                  workspace_id: str = "default"):
     if not thought or not thought.strip():
         return
     thought = thought.strip()[:_MAX_THOUGHT]
@@ -564,8 +715,9 @@ def store_thought(agent: str, thought: str, metadata: Optional[dict] = None):
         meta = json.dumps(metadata or {})
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO agent_memory (agent_name, thought, embedding, tokens, metadata) VALUES (%s, %s, %s::vector, %s, %s::jsonb)",
-                (agent, thought, str(vec), tok, meta),
+                "INSERT INTO agent_memory (agent_name, thought, embedding, tokens, metadata, workspace_id) "
+                "VALUES (%s, %s, %s::vector, %s, %s::jsonb, %s)",
+                (agent, thought, str(vec), tok, meta, workspace_id or "default"),
             )
             conn.commit()
             _invalidate_cache()
@@ -607,14 +759,15 @@ def store_batch(entries: List[Dict[str, Any]]):
             agent = e.get("agent", "default")
             meta = json.dumps(e.get("metadata", {}))
             tok = len(thought.split())
-            rows.append((agent, thought, str(vec), tok, meta))
+            ws = e.get("workspace_id") or "default"
+            rows.append((agent, thought, str(vec), tok, meta, ws))
         with conn.cursor() as cur:
             from psycopg2.extras import execute_values
             execute_values(
                 cur,
-                "INSERT INTO agent_memory (agent_name, thought, embedding, tokens, metadata) VALUES %s",
+                "INSERT INTO agent_memory (agent_name, thought, embedding, tokens, metadata, workspace_id) VALUES %s",
                 rows,
-                template="(%s, %s, %s::vector, %s, %s::jsonb)",
+                template="(%s, %s, %s::vector, %s, %s::jsonb, %s)",
                 page_size=500,
             )
             conn.commit()
@@ -631,10 +784,10 @@ def store_batch(entries: List[Dict[str, Any]]):
 
 
 def retrieve_similar(query: str, limit: int = 5, agent_filter: Optional[str] = None,
-                     min_score: float = 0.0) -> List[str]:
+                     min_score: float = 0.0, workspace_id: Optional[str] = None) -> List[str]:
     limit = max(1, min(limit, 50))
     now = time.time()
-    cache_key = f"{query}:{limit}:{agent_filter}:{min_score}"
+    cache_key = f"{query}:{limit}:{agent_filter}:{min_score}:{workspace_id}"
     with _cache_lock:
         if cache_key in _query_cache and now - _query_cache_time.get(cache_key, 0) < _CACHE_TTL:
             return list(_query_cache[cache_key])
@@ -650,10 +803,21 @@ def retrieve_similar(query: str, limit: int = 5, agent_filter: Optional[str] = N
         vec = embedder.encode(query, normalize_embeddings=True).tolist()
         with conn.cursor() as cur:
             _force_seq_scan(cur)
-            if agent_filter:
+            if agent_filter and workspace_id:
+                cur.execute(
+                    "SELECT thought, (embedding <=> %s::vector) AS dist FROM agent_memory "
+                    "WHERE agent_name = %s AND workspace_id = %s ORDER BY dist LIMIT %s",
+                    (str(vec), agent_filter, workspace_id, limit),
+                )
+            elif agent_filter:
                 cur.execute(
                     "SELECT thought, (embedding <=> %s::vector) AS dist FROM agent_memory WHERE agent_name = %s ORDER BY dist LIMIT %s",
                     (str(vec), agent_filter, limit),
+                )
+            elif workspace_id:
+                cur.execute(
+                    "SELECT thought, (embedding <=> %s::vector) AS dist FROM agent_memory WHERE workspace_id = %s ORDER BY dist LIMIT %s",
+                    (str(vec), workspace_id, limit),
                 )
             else:
                 cur.execute(
@@ -677,14 +841,19 @@ def retrieve_similar(query: str, limit: int = 5, agent_filter: Optional[str] = N
         _put_conn(conn)
 
 
-def count_memories(agent: Optional[str] = None) -> int:
+def count_memories(agent: Optional[str] = None, workspace_id: Optional[str] = None) -> int:
     conn = _get_conn()
     if not conn:
         return 0
     try:
         with conn.cursor() as cur:
-            if agent:
+            if agent and workspace_id:
+                cur.execute("SELECT COUNT(*) FROM agent_memory WHERE agent_name = %s AND workspace_id = %s",
+                            (agent, workspace_id))
+            elif agent:
                 cur.execute("SELECT COUNT(*) FROM agent_memory WHERE agent_name = %s", (agent,))
+            elif workspace_id:
+                cur.execute("SELECT COUNT(*) FROM agent_memory WHERE workspace_id = %s", (workspace_id,))
             else:
                 cur.execute("SELECT COUNT(*) FROM agent_memory")
             return cur.fetchone()[0]
@@ -695,23 +864,37 @@ def count_memories(agent: Optional[str] = None) -> int:
         _put_conn(conn)
 
 
-def recent_memories(limit: int = 20, agent: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Newest memories as dicts (id, agent, thought, tokens, created_at, metadata)."""
+def recent_memories(limit: int = 20, agent: Optional[str] = None,
+                    workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Newest memories as dicts (id, agent, thought, tokens, created_at, metadata, workspace_id)."""
     limit = max(1, min(limit, 100))
     conn = _get_conn()
     if not conn:
         return []
     try:
         with conn.cursor() as cur:
-            if agent:
+            if agent and workspace_id:
                 cur.execute(
-                    "SELECT id, agent_name, thought, tokens, created_at, metadata "
+                    "SELECT id, agent_name, thought, tokens, created_at, metadata, workspace_id "
+                    "FROM agent_memory WHERE agent_name = %s AND workspace_id = %s "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (agent, workspace_id, limit),
+                )
+            elif agent:
+                cur.execute(
+                    "SELECT id, agent_name, thought, tokens, created_at, metadata, workspace_id "
                     "FROM agent_memory WHERE agent_name = %s ORDER BY created_at DESC LIMIT %s",
                     (agent, limit),
                 )
+            elif workspace_id:
+                cur.execute(
+                    "SELECT id, agent_name, thought, tokens, created_at, metadata, workspace_id "
+                    "FROM agent_memory WHERE workspace_id = %s ORDER BY created_at DESC LIMIT %s",
+                    (workspace_id, limit),
+                )
             else:
                 cur.execute(
-                    "SELECT id, agent_name, thought, tokens, created_at, metadata "
+                    "SELECT id, agent_name, thought, tokens, created_at, metadata, workspace_id "
                     "FROM agent_memory ORDER BY created_at DESC LIMIT %s",
                     (limit,),
                 )
@@ -731,6 +914,7 @@ def recent_memories(limit: int = 20, agent: Optional[str] = None) -> List[Dict[s
                 "tokens": r[3] or 0,
                 "created_at": r[4].isoformat() if r[4] else None,
                 "metadata": meta,
+                "workspace_id": r[6] if len(r) > 6 else "default",
             })
         return out
     except Exception as e:
@@ -741,7 +925,7 @@ def recent_memories(limit: int = 20, agent: Optional[str] = None) -> List[Dict[s
 
 
 def search_memories(query: str, limit: int = 5, agent: Optional[str] = None,
-                    min_score: float = 0.0) -> List[Dict[str, Any]]:
+                    min_score: float = 0.0, workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Semantic pgvector search returning rich results with similarity scores."""
     limit = max(1, min(limit, 50))
     conn = _get_conn()
@@ -755,11 +939,23 @@ def search_memories(query: str, limit: int = 5, agent: Optional[str] = None,
         vec = embedder.encode(query, normalize_embeddings=True).tolist()
         with conn.cursor() as cur:
             _force_seq_scan(cur)
-            if agent:
+            if agent and workspace_id:
+                cur.execute(
+                    "SELECT id, agent_name, thought, tokens, created_at, (embedding <=> %s::vector) AS dist "
+                    "FROM agent_memory WHERE agent_name = %s AND workspace_id = %s ORDER BY dist LIMIT %s",
+                    (str(vec), agent, workspace_id, limit),
+                )
+            elif agent:
                 cur.execute(
                     "SELECT id, agent_name, thought, tokens, created_at, (embedding <=> %s::vector) AS dist "
                     "FROM agent_memory WHERE agent_name = %s ORDER BY dist LIMIT %s",
                     (str(vec), agent, limit),
+                )
+            elif workspace_id:
+                cur.execute(
+                    "SELECT id, agent_name, thought, tokens, created_at, (embedding <=> %s::vector) AS dist "
+                    "FROM agent_memory WHERE workspace_id = %s ORDER BY dist LIMIT %s",
+                    (str(vec), workspace_id, limit),
                 )
             else:
                 cur.execute(
@@ -789,15 +985,18 @@ def search_memories(query: str, limit: int = 5, agent: Optional[str] = None,
         _put_conn(conn)
 
 
-def clear_memories() -> int:
-    """Delete every memory row. Returns the number deleted."""
+def clear_memories(workspace_id: Optional[str] = None) -> int:
+    """Delete every memory row (optionally scoped to a workspace). Returns the number deleted."""
     conn = _get_conn()
     if not conn:
         return 0
     deleted = 0
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM agent_memory")
+            if workspace_id:
+                cur.execute("DELETE FROM agent_memory WHERE workspace_id = %s", (workspace_id,))
+            else:
+                cur.execute("DELETE FROM agent_memory")
             deleted = cur.rowcount
             conn.commit()
             _invalidate_cache()
@@ -822,7 +1021,7 @@ def db_stats() -> Dict[str, Any]:
         "count": 0,
         "total_tokens": 0,
         "agents": {},
-        "vector_dim": 384,
+        "vector_dim": embed_dim(),
         "ivfflat": False,
         "hnsw": False,
         "table_bytes": 0,
@@ -830,6 +1029,7 @@ def db_stats() -> Dict[str, Any]:
         "conversations": 0,
         "custom_agents": 0,
         "custom_skills": 0,
+        "sessions": 0,
         "pool": {"min": 1, "max": CONFIG.db.maxconn, "active": 0},
         "auto_prune": False,
         "prune_interval_hours": CONFIG.prune_interval_hours,
@@ -860,6 +1060,8 @@ def db_stats() -> Dict[str, Any]:
             info["custom_agents"] = cur.fetchone()[0] or 0
             cur.execute("SELECT COUNT(*) FROM skills")
             info["custom_skills"] = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM sessions")
+            info["sessions"] = cur.fetchone()[0] or 0
             cur.execute("SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'idx_agent_memory_ivfflat'")
             info["ivfflat"] = (cur.fetchone()[0] or 0) > 0
             cur.execute("SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'idx_agent_memory_hnsw'")
@@ -903,14 +1105,20 @@ def db_stats() -> Dict[str, Any]:
     return info
 
 
-def prune_memories(max_age_days: int = 30):
+def prune_memories(max_age_days: int = 30, workspace_id: Optional[str] = None):
     conn = _get_conn()
     if not conn:
         return 0
     deleted = 0
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM agent_memory WHERE created_at < NOW() - make_interval(days => %s)", (max_age_days,))
+            if workspace_id:
+                cur.execute(
+                    "DELETE FROM agent_memory WHERE workspace_id = %s AND created_at < NOW() - make_interval(days => %s)",
+                    (workspace_id, max_age_days),
+                )
+            else:
+                cur.execute("DELETE FROM agent_memory WHERE created_at < NOW() - make_interval(days => %s)", (max_age_days,))
             deleted = cur.rowcount
             conn.commit()
             if deleted:
@@ -1193,6 +1401,7 @@ def delete_workspace(workspace_id: str) -> bool:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM workspace_files WHERE workspace_id = %s", (workspace_id,))
             cur.execute("DELETE FROM agent_memory WHERE agent_name = %s", (_ws_agent_name(workspace_id),))
+            cur.execute("DELETE FROM agent_memory WHERE workspace_id = %s", (workspace_id,))
             cur.execute("DELETE FROM conversations WHERE workspace_id = %s", (workspace_id,))
             cur.execute("DELETE FROM workspaces WHERE id = %s", (workspace_id,))
             deleted = cur.rowcount
@@ -1604,6 +1813,322 @@ def load_skills() -> List[Dict[str, Any]]:
         return []
     finally:
         _put_conn(conn)
+
+
+# ---------- Sessions (multi-user identity / persisted contexts) ----------
+
+_FALLBACK_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_FALLBACK_SESSIONS_LOCK = Lock()
+
+
+def create_session(session_id: str, name: str = "", user_id: str = "",
+                   metadata: Optional[dict] = None) -> Dict[str, Any]:
+    """Create or touch a session row. In-memory fallback when DB off."""
+    session_id = (session_id or "").strip() or f"session-{time.time():.0f}"
+    created = time.time()
+    conn = _get_conn()
+    if not conn:
+        with _FALLBACK_SESSIONS_LOCK:
+            sess = {
+                "id": session_id, "name": name, "user_id": user_id,
+                "metadata": dict(metadata or {}),
+                "created_at": created, "updated_at": created, "last_active_at": created,
+            }
+            _FALLBACK_SESSIONS[session_id] = sess
+            return dict(sess)
+    try:
+        meta = json.dumps(metadata or {})
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sessions (id, name, user_id, metadata, created_at, updated_at, last_active_at) "
+                "VALUES (%s, %s, %s, %s::jsonb, to_timestamp(%s), to_timestamp(%s), to_timestamp(%s)) "
+                "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, user_id = EXCLUDED.user_id, "
+                "metadata = EXCLUDED.metadata, updated_at = EXCLUDED.updated_at, "
+                "last_active_at = EXCLUDED.last_active_at "
+                "RETURNING id, name, user_id, metadata, created_at, updated_at, last_active_at",
+                (session_id, name, user_id, meta, created, created, created),
+            )
+            r = cur.fetchone()
+            conn.commit()
+        if r:
+            return _session_row(r)
+        return {"id": session_id, "name": name, "user_id": user_id,
+                "metadata": dict(metadata or {}), "created_at": created,
+                "updated_at": created, "last_active_at": created}
+    except Exception as e:
+        logger.warning(f"Create session: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        with _FALLBACK_SESSIONS_LOCK:
+            sess = {"id": session_id, "name": name, "user_id": user_id,
+                    "metadata": dict(metadata or {}), "created_at": created,
+                    "updated_at": created, "last_active_at": created}
+            _FALLBACK_SESSIONS[session_id] = sess
+            return dict(sess)
+    finally:
+        _put_conn(conn)
+
+
+def _session_row(r) -> Dict[str, Any]:
+    meta = r[3] or {}
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except Exception:
+            meta = {}
+    return {
+        "id": r[0],
+        "name": r[1] or "",
+        "user_id": r[2] or "",
+        "metadata": meta,
+        "created_at": r[4].isoformat() if r[4] else None,
+        "updated_at": r[5].isoformat() if r[5] else None,
+        "last_active_at": r[6].isoformat() if r[6] else None,
+    }
+
+
+def get_session(session_id: str) -> Optional[Dict[str, Any]]:
+    if not session_id:
+        return None
+    conn = _get_conn()
+    if not conn:
+        with _FALLBACK_SESSIONS_LOCK:
+            sess = _FALLBACK_SESSIONS.get(session_id)
+            return dict(sess) if sess else None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, user_id, metadata, created_at, updated_at, last_active_at "
+                "FROM sessions WHERE id = %s", (session_id,)
+            )
+            r = cur.fetchone()
+        return _session_row(r) if r else None
+    except Exception as e:
+        logger.warning(f"Get session: {e}")
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def list_sessions(limit: int = 100, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    limit = max(1, min(limit, 500))
+    conn = _get_conn()
+    if not conn:
+        with _FALLBACK_SESSIONS_LOCK:
+            out = [dict(s) for s in _FALLBACK_SESSIONS.values()]
+            if user_id:
+                out = [s for s in out if s.get("user_id") == user_id]
+            out.sort(key=lambda s: s.get("last_active_at") or 0, reverse=True)
+            return out[:limit]
+    try:
+        with conn.cursor() as cur:
+            if user_id:
+                cur.execute(
+                    "SELECT id, name, user_id, metadata, created_at, updated_at, last_active_at "
+                    "FROM sessions WHERE user_id = %s ORDER BY last_active_at DESC LIMIT %s",
+                    (user_id, limit),
+                )
+            else:
+                cur.execute(
+                    "SELECT id, name, user_id, metadata, created_at, updated_at, last_active_at "
+                    "FROM sessions ORDER BY last_active_at DESC LIMIT %s",
+                    (limit,),
+                )
+            rows = cur.fetchall()
+        return [_session_row(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"List sessions: {e}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def touch_session(session_id: str) -> bool:
+    """Bump last_active_at (heartbeat)."""
+    if not session_id:
+        return False
+    conn = _get_conn()
+    if not conn:
+        with _FALLBACK_SESSIONS_LOCK:
+            sess = _FALLBACK_SESSIONS.get(session_id)
+            if sess:
+                sess["last_active_at"] = time.time()
+                sess["updated_at"] = time.time()
+                return True
+            return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE sessions SET last_active_at = NOW(), updated_at = NOW() WHERE id = %s",
+                        (session_id,))
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Touch session: {e}")
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def delete_session(session_id: str) -> bool:
+    if not session_id:
+        return False
+    conn = _get_conn()
+    if not conn:
+        with _FALLBACK_SESSIONS_LOCK:
+            return _FALLBACK_SESSIONS.pop(session_id, None) is not None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM sessions WHERE id = %s", (session_id,))
+            deleted = cur.rowcount > 0
+            conn.commit()
+        return deleted
+    except Exception as e:
+        logger.warning(f"Delete session: {e}")
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def prune_sessions(max_age_days: int = 30) -> int:
+    """Delete sessions inactive for more than max_age_days. Returns count."""
+    conn = _get_conn()
+    if not conn:
+        return 0
+    deleted = 0
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM sessions WHERE last_active_at < NOW() - make_interval(days => %s)",
+                (max_age_days,),
+            )
+            deleted = cur.rowcount
+            conn.commit()
+        if deleted:
+            logger.info(f"Pruned {deleted} stale sessions")
+    except Exception as e:
+        logger.warning(f"Prune sessions: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        _put_conn(conn)
+    return deleted
+
+
+# ---------- Metrics snapshots (persisted history) ----------
+
+_FALLBACK_METRICS: List[Dict[str, Any]] = []
+_FALLBACK_METRICS_LOCK = Lock()
+_FALLBACK_METRICS_MAX = 500
+
+
+def save_metrics_snapshot(snapshot: dict) -> bool:
+    """Persist a MetricsCollector snapshot row. In-memory ring fallback when DB off."""
+    if not snapshot:
+        return False
+    conn = _get_conn()
+    if not conn:
+        with _FALLBACK_METRICS_LOCK:
+            _FALLBACK_METRICS.append({
+                "taken_at": time.time(),
+                "snapshot": dict(snapshot),
+            })
+            while len(_FALLBACK_METRICS) > _FALLBACK_METRICS_MAX:
+                _FALLBACK_METRICS.pop(0)
+        return True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO metrics_snapshots (snapshot) VALUES (%s::jsonb)",
+                (json.dumps(snapshot, default=str),),
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Save metrics snapshot: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        with _FALLBACK_METRICS_LOCK:
+            _FALLBACK_METRICS.append({"taken_at": time.time(), "snapshot": dict(snapshot)})
+            while len(_FALLBACK_METRICS) > _FALLBACK_METRICS_MAX:
+                _FALLBACK_METRICS.pop(0)
+        return True
+    finally:
+        _put_conn(conn)
+
+
+def list_metrics_snapshots(limit: int = 60) -> List[Dict[str, Any]]:
+    """Return recent snapshots newest-first. In-memory fallback when DB off."""
+    limit = max(1, min(limit, 500))
+    conn = _get_conn()
+    if not conn:
+        with _FALLBACK_METRICS_LOCK:
+            out = [dict(s) for s in _FALLBACK_METRICS]
+            out.reverse()
+            return out[:limit]
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT taken_at, snapshot FROM metrics_snapshots "
+                "ORDER BY taken_at DESC LIMIT %s", (limit,)
+            )
+            rows = cur.fetchall()
+        out = []
+        for r in rows:
+            snap = r[1]
+            if isinstance(snap, str):
+                try:
+                    snap = json.loads(snap)
+                except Exception:
+                    snap = {}
+            out.append({
+                "taken_at": r[0].isoformat() if r[0] else None,
+                "snapshot": snap,
+            })
+        return out
+    except Exception as e:
+        logger.warning(f"List metrics snapshots: {e}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def prune_metrics_snapshots(max_rows: int = 500) -> int:
+    """Keep only the newest max_rows snapshots. Returns number deleted."""
+    conn = _get_conn()
+    if not conn:
+        with _FALLBACK_METRICS_LOCK:
+            over = len(_FALLBACK_METRICS) - max_rows
+            if over > 0:
+                del _FALLBACK_METRICS[:over]
+                return over
+        return 0
+    deleted = 0
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM metrics_snapshots WHERE id NOT IN ("
+                "  SELECT id FROM metrics_snapshots ORDER BY taken_at DESC LIMIT %s)",
+                (max_rows,),
+            )
+            deleted = cur.rowcount
+            conn.commit()
+        if deleted:
+            logger.info(f"Pruned {deleted} metrics snapshots")
+    except Exception as e:
+        logger.warning(f"Prune metrics snapshots: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        _put_conn(conn)
+    return deleted
 
 
 def list_workspace_files(workspace_id: str) -> List[Dict[str, Any]]:

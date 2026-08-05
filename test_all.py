@@ -636,6 +636,35 @@ with mock.patch.object(db_mod, "get_pool", return_value=pool), \
     check("delete_skill", db_mod.delete_skill("custom-s") is True)
     check("delete_skill sql", any("DELETE FROM skills" in s for s, _ in executed))
 
+    conn.cur.rows = [("sess-1", "Sess", "u1", '{"k":"v"}', None, None, None)]
+    _orig_fetchone = conn.cur.fetchone
+    conn.cur.fetchone = lambda: conn.cur.rows[0] if conn.cur.rows else None
+    sess = db_mod.create_session("sess-1", "Sess", "u1", {"k": "v"})
+    check("create_session rows", sess["id"] == "sess-1" and sess["user_id"] == "u1" and sess["metadata"] == {"k": "v"}, f"({sess})")
+    check("create_session sql", any("INSERT INTO sessions" in s for s, _ in executed))
+    check("get_session rows", db_mod.get_session("sess-1")["name"] == "Sess")
+    conn.cur.rows = []
+    check("get_session missing", db_mod.get_session("nope") is None)
+    conn.cur.rows = [("sess-1", "Sess", "u1", '{"k":"v"}', None, None, None)]
+    check("touch_session", db_mod.touch_session("sess-1") is True)
+    check("touch_session sql", any("UPDATE sessions" in s for s, _ in executed))
+    check("delete_session", db_mod.delete_session("sess-1") is True)
+    check("delete_session sql", any("DELETE FROM sessions" in s for s, _ in executed))
+    conn.cur.rowcount = 0
+    check("prune_sessions rowcount", db_mod.prune_sessions(30) == 0)
+    check("prune_sessions sql", any("DELETE FROM sessions" in s for s, _ in executed))
+    conn.cur.fetchone = _orig_fetchone
+
+    check("save_metrics_snapshot", db_mod.save_metrics_snapshot({"requests": 5}) is True)
+    check("save_metrics_snapshot sql", any("INSERT INTO metrics_snapshots" in s for s, _ in executed))
+    conn.cur.rows = [(None, '{"requests":5}')]
+    snap = db_mod.list_metrics_snapshots(limit=5)
+    check("list_metrics_snapshots rows", len(snap) == 1 and snap[0]["snapshot"] == {"requests": 5}, f"({snap})")
+    check("list_metrics_snapshots sql", any("FROM metrics_snapshots" in s for s, _ in executed))
+    conn.cur.rowcount = 0
+    check("prune_metrics_snapshots", db_mod.prune_metrics_snapshots(500) == 0)
+    check("prune_metrics_snapshots sql", any("DELETE FROM metrics_snapshots" in s for s, _ in executed))
+
     with mock.patch.object(db_mod, "get_pool", return_value=None):
         check("retrieve with no pool", db_mod.retrieve_similar("no-pool-q") == [])
     with mock.patch.object(db_mod, "get_embedder", return_value=None):
@@ -715,6 +744,20 @@ check("store_file_chunks no conn 0", db_mod.store_file_chunks("files", "a.txt", 
 check("search_workspace_knowledge no conn empty", db_mod.search_workspace_knowledge("files", "q") == [])
 check("_ws_agent_name", db_mod._ws_agent_name("abc") == "workspace:abc")
 db_mod.reset_workspace_store()
+
+sess = db_mod.create_session("", "Fallback Sess", "u9", {"k": "v"})
+check("create_session fallback", sess["id"].startswith("session-") and sess["user_id"] == "u9" and sess["metadata"] == {"k": "v"}, f"({sess})")
+check("get_session fallback", db_mod.get_session(sess["id"])["name"] == "Fallback Sess")
+check("list_sessions fallback", any(s["id"] == sess["id"] for s in db_mod.list_sessions()))
+check("list_sessions user filter", any(s["id"] == sess["id"] for s in db_mod.list_sessions(user_id="u9")))
+check("touch_session fallback", db_mod.touch_session(sess["id"]) is True)
+check("delete_session fallback", db_mod.delete_session(sess["id"]) is True)
+check("get_session fallback missing", db_mod.get_session(sess["id"]) is None)
+
+check("save_metrics_snapshot fallback", db_mod.save_metrics_snapshot({"requests": 1}) is True)
+check("save_metrics_snapshot empty rejected", db_mod.save_metrics_snapshot({}) is False)
+hist = db_mod.list_metrics_snapshots(limit=10)
+check("list_metrics_snapshots fallback", len(hist) == 1 and hist[0]["snapshot"] == {"requests": 1}, f"({hist})")
 
 # TASK-HP-002: file-upload chunks must be batch-embedded (one encode() call for all chunks)
 class BatchAwareEmbedder(FakeEmbedder):
@@ -1340,6 +1383,34 @@ with mock.patch.object(api_mod.model_manager, "generate", side_effect=fake_gener
     r = client.get("/v1/metrics")
     j = r.json()
     check("GET /v1/metrics", "tokens_out" in j and "per_model" in j and "per_task" in j)
+
+    r = client.get("/v1/metrics/history")
+    j = r.json()
+    check("GET /v1/metrics/history", "snapshots" in j and isinstance(j["snapshots"], list))
+    r = client.post("/v1/metrics/history", json={"requests": 3, "tokens_out": 42})
+    check("POST /v1/metrics/history", r.status_code == 200 and r.json().get("status") == "saved")
+    r = client.post("/v1/metrics/history", json={})
+    check("POST /v1/metrics/history empty rejected", r.status_code == 400)
+    r = client.post("/v1/metrics/history/prune?max_rows=100")
+    check("POST /v1/metrics/history/prune", r.status_code == 200 and "deleted" in r.json())
+
+    r = client.get("/v1/sessions")
+    j = r.json()
+    check("GET /v1/sessions", "sessions" in j and isinstance(j["sessions"], list))
+    r = client.post("/v1/sessions", json={"name": "Sess A", "user_id": "u1"})
+    j = r.json()
+    check("POST /v1/sessions", r.status_code == 200 and j["session"]["name"] == "Sess A", f"({j})")
+    sid = j["session"]["id"]
+    r = client.get(f"/v1/sessions/{sid}")
+    check("GET /v1/sessions/{id}", r.json()["session"]["id"] == sid)
+    r = client.post(f"/v1/sessions/{sid}/update", json={"name": "Sess B", "touch": True})
+    check("POST /v1/sessions/{id}/update", r.json()["session"]["name"] == "Sess B")
+    r = client.delete(f"/v1/sessions/{sid}")
+    check("DELETE /v1/sessions/{id}", r.json()["status"] == "deleted")
+    r = client.get(f"/v1/sessions/{sid}")
+    check("GET missing session 404", r.status_code == 404)
+    r = client.post("/v1/sessions/prune?max_age_days=30")
+    check("POST /v1/sessions/prune", r.status_code == 200 and "deleted" in r.json())
 
     r = client.get("/v1/router/stats")
     j = r.json()

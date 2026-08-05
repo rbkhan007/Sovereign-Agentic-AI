@@ -109,6 +109,15 @@ GET  /v1/healing/config          # Self-healing agent configuration
 POST /v1/healing/run            # {code, context?, timeout_s?} -> {success, output, attempts, final_code}
 GET  /v1/system                  # System info incl. hardware + metrics
 GET  /v1/metrics                 # Runtime metrics (per model / per task)
+GET  /v1/metrics/history         # Persisted metrics snapshots (?limit=; newest-first, DB-off ring fallback)
+POST /v1/metrics/history         # Save a metrics snapshot ({...}) -> {status: saved}
+POST /v1/metrics/history/prune   # Keep only newest ?max_rows= snapshots -> {deleted}
+GET  /v1/sessions                # List persisted sessions (?limit=&user_id=)
+POST /v1/sessions                # Create session ({session_id?, name?, user_id?, metadata?}) -> {session, id}
+GET  /v1/sessions/{id}           # Get a session
+POST /v1/sessions/{id}/update    # Update name/user_id/metadata (+ touch: bump last_active_at)
+DELETE /v1/sessions/{id}         # Delete a session
+POST /v1/sessions/prune          # Delete sessions inactive > ?max_age_days= -> {deleted}
 GET  /v1/router/stats            # Adaptive harness fitness scores
 POST /v1/router/harness/reset    # Reset harness scores to defaults
 POST /v1/router/harness/adjust   # Manually adjust a task/model score
@@ -171,7 +180,7 @@ run.py              # Unified launcher (full/web/cli/api) + port auto-fallback +
 config.py           # App configuration (GPU, threads, DB, model paths, CLOUD_PRESETS incl. Claude/Anthropic, GGUF auto-discovery)
 models.py           # Model manager (lazy loading with lazy llama_cpp import, GPU offload, OpenAI fallback, VRAM budget/LRU, per-model worker threads + generation watchdog)
 memory.py           # In-memory conversation manager (workspace-indexed conversations, DB-backed persistence when pool live)
-database.py         # pgvector memory (PostgreSQL + sentence-transformers) + workspaces/files layer + DB-backed conversations/agents/skills + auto-creates DB if missing + pgAdmin 4 auto-registration
+database.py         # pgvector memory (PostgreSQL + sentence-transformers or remote embedder) + workspaces/files layer + DB-backed conversations/agents/skills/sessions/metrics snapshots + auto-creates DB if missing + pgAdmin 4 auto-registration
 router.py           # Selection room: classify_task + adaptive Harness scorer (reset/adjust/export/import) + ModelRouter
 hardware.py         # Auto-tune: RAM/VRAM detection (PowerShell fallback), threads, VRAM budget, context caps
 metrics.py          # Thread-safe MetricsCollector (loads, latency, tokens, per-model/task)
@@ -222,6 +231,10 @@ test_load.py        # Load/balance stress tool (cheap endpoints + real chat gene
 - **Computer agent hardening**: `computer_agent` uses a brace-matching parser (`_balanced_json_block`) so tool calls with nested JSON args parse correctly; in sandbox mode `read_file`/`list_dir`/`search_files` are scoped to the project directory; `/v1/computer/*` caps `max_steps` (1-50) and the API enforces `sandbox = CONFIG.sandbox or req.sandbox` so `--sandbox` cannot be downgraded by a caller
 - **Workspaces**: isolated chat areas backed by PostgreSQL `workspaces`/`workspace_files` tables (in-memory fallback when DB off); conversations are workspace-indexed in `MemoryManager`, workspace `system_prompt` is injected into chats, file uploads are chunked (600 chars / 120 overlap) and embedded under agent `workspace:<id>` so `orchestrator.run/stream` merges global + workspace-scoped knowledge (de-duped); export/import re-binds conversations to the target workspace and never mutates a conversation owned by another workspace; the built-in `default` workspace is delete-protected
 - **Embedder guard**: pgvector store/search functions return early when the pool is unavailable, so the sentence-transformers model is never loaded for embedding when PostgreSQL is off (avoids a multi-second stall on first DB-touching call)
+- **Swappable embedder**: `CONFIG.embedder` (env `LLM_EMBEDDER_PROVIDER/MODEL/DIMENSION/API_KEY/BASE_URL`, `POST /v1/config embedder.*`) selects the embedding source — `local` (default sentence-transformers `all-MiniLM-L6-v2`) or a remote OpenAI-compatible `/embeddings` endpoint (`openai|azure|openrouter|groq|gemini`); `database.get_embedder()` returns a `_RemoteEmbedder` (urllib, L2-normalized, dim-truncated) and `embed_dim()` drives the schema; `_ensure_schema` builds `vector(%s)` from the configured dimension and `_migrate_vector_dim()` re-creates the pgvector column + drops the ivfflat/hnsw index when the dimension changes; `reset_embedder()` clears the cached embedder so config edits take effect live
+- **Workspace-scoped memories**: `agent_memory` carries `workspace_id` (default `default`, indexed `idx_agent_memory_ws`); `store_thought`/`store_batch`/`retrieve_similar`/`count_memories`/`recent_memories`/`search_memories`/`prune_memories`/`clear_memories` all accept workspace scoping; `orchestrator.run/stream` scope retrieval to the active workspace (non-default) while still merging global + workspace knowledge; `delete_workspace` cascades the workspace's memories
+- **Sessions**: `sessions` table (id/name/user_id/metadata JSONB/timestamps) + CRUD (`create_session` upserts, `get_session`, `list_sessions`, `touch_session` heartbeat, `delete_session`, `prune_sessions`) with in-memory ring fallback when DB off; exposed as `/v1/sessions*` (list/create/get/update/delete/prune) for multi-user identity and persisted contexts
+- **Metrics snapshots**: `save_metrics_snapshot`/`list_metrics_snapshots`/`prune_metrics_snapshots` persist `MetricsCollector.snapshot()` JSONB into `metrics_snapshots` (in-memory ring fallback, capped 500) so `GET /v1/metrics/history` returns trending charts; the API lifespan runs a daemon thread (60s) that snapshots + prunes to 1000 rows while the DB is enabled
 - **Concurrency**: per-model locks allow different models to generate in parallel; same-model calls are serialized; each model's llama_cpp calls run on its own pinned worker thread (single-thread executor) so GPU inference is never invoked from multiple threads
 - **Generation watchdog**: a hung generation (known llama.cpp/Vulkan sampler stall on AMD) is killed after `gen.timeout_s` (default 240, `--gen-timeout`, `POST /v1/config gen.timeout_s`, env `LLM_GEN_TIMEOUT`); the stuck instance+worker are discarded and the next request auto-reloads the model (OpenAI fallback applies if enabled)
 - **Streaming**: `/v1/chat/stream` and `stream=true` yield real tokens via `llama_cpp(stream=True)`; blocking inference runs in a worker thread so the event loop stays responsive

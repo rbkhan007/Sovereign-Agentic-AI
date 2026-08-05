@@ -222,7 +222,8 @@ class Orchestrator:
 
         if not sandbox and CONFIG.db.enabled:
             try:
-                memories = db.retrieve_similar(user_message)
+                ws_scope = workspace_id if workspace_id != "default" else None
+                memories = db.retrieve_similar(user_message, workspace_id=ws_scope)
                 if workspace_id and workspace_id != "default":
                     ws_mem = db.search_workspace_knowledge(workspace_id, user_message)
                     known = set(memories)
@@ -323,7 +324,8 @@ class Orchestrator:
 
         if not sandbox and CONFIG.db.enabled and response:
             try:
-                db.store_thought(exec_model, f"Q: {user_message}\nA: {response[:1000]}")
+                db.store_thought(exec_model, f"Q: {user_message}\nA: {response[:1000]}",
+                                 workspace_id=workspace_id)
             except Exception:
                 logger.warning("Memory store failed", exc_info=True)
 
@@ -378,7 +380,8 @@ class Orchestrator:
         memories = []
         if not sandbox and CONFIG.db.enabled:
             try:
-                memories = db.retrieve_similar(user_message)
+                ws_scope = workspace_id if workspace_id != "default" else None
+                memories = db.retrieve_similar(user_message, workspace_id=ws_scope)
                 if workspace_id and workspace_id != "default":
                     ws_mem = db.search_workspace_knowledge(workspace_id, user_message)
                     known = set(memories)
@@ -476,7 +479,8 @@ class Orchestrator:
 
         if not sandbox and CONFIG.db.enabled and response:
             try:
-                db.store_thought(exec_model, f"Q: {user_message}\nA: {response[:500]}")
+                db.store_thought(exec_model, f"Q: {user_message}\nA: {response[:500]}",
+                                 workspace_id=workspace_id)
             except Exception:
                 logger.warning("Memory store failed (stream)", exc_info=True)
 

@@ -145,6 +145,13 @@ class AppConfig:
     })
     db: DBConfig = field(default_factory=DBConfig)
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
+    embedder: dict = field(default_factory=lambda: {
+        "provider": "local",
+        "model": "all-MiniLM-L6-v2",
+        "dimension": 384,
+        "api_key": "",
+        "base_url": "",
+    })
 
     models: List[ModelConfig] = field(default_factory=lambda: [
         ModelConfig(
@@ -257,6 +264,18 @@ class AppConfig:
             self.automl["time_limit"] = int(os.environ["LLM_AUTOML_TIME_LIMIT"].strip())
         if os.environ.get("LLM_HEALING", "").strip().lower() in ("1", "true", "yes", "on"):
             self.healing["enabled"] = True
+        _emb_provider = os.environ.get("LLM_EMBEDDER_PROVIDER", "").strip()
+        if _emb_provider:
+            self.embedder["provider"] = _emb_provider
+        if os.environ.get("LLM_EMBEDDER_MODEL", "").strip():
+            self.embedder["model"] = os.environ["LLM_EMBEDDER_MODEL"].strip()
+        _emb_dim = os.environ.get("LLM_EMBEDDER_DIMENSION", "").strip()
+        if _emb_dim.isdigit():
+            self.embedder["dimension"] = max(64, int(_emb_dim))
+        if os.environ.get("LLM_EMBEDDER_API_KEY", "").strip():
+            self.embedder["api_key"] = os.environ["LLM_EMBEDDER_API_KEY"].strip()
+        if os.environ.get("LLM_EMBEDDER_BASE_URL", "").strip():
+            self.embedder["base_url"] = os.environ["LLM_EMBEDDER_BASE_URL"].strip()
         if os.environ.get("LLM_ALLOW_UNSAFE_COMPUTER", "").strip().lower() in ("1", "true", "yes", "on"):
             self.computer["allow_unsafe"] = True
         if os.environ.get("LLM_ADMIN_KEY", "").strip():

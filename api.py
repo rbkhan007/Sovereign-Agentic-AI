@@ -59,6 +59,24 @@ _start_ts = time.time()
 _graph_sync_stop = threading.Event()
 _graph_sync_thread: Optional[threading.Thread] = None
 
+_metrics_snap_stop = threading.Event()
+_metrics_snap_thread: Optional[threading.Thread] = None
+
+
+def _metrics_snapshot_loop(interval_secs: int = 60):
+    """Periodically persist MetricsCollector snapshots for history charts."""
+    interval = max(10, interval_secs)
+    while not _metrics_snap_stop.wait(timeout=interval):
+        try:
+            if not CONFIG.db.enabled:
+                continue
+            import database as db
+            from metrics import metrics
+            db.save_metrics_snapshot(metrics.snapshot())
+            db.prune_metrics_snapshots(1000)
+        except Exception as e:
+            logger.debug(f"Background metrics snapshot error: {e}")
+
 
 def _graph_sync_loop(interval_minutes: int = 5):
     """Periodically sync in-memory wiki-link graph to PostgreSQL graph store."""
@@ -120,7 +138,17 @@ async def lifespan(app: FastAPI):
         target=_graph_sync_loop, args=(5,), daemon=True, name="graph-sync"
     )
     _graph_sync_thread.start()
+    # Start periodic metrics snapshot persistence (every 60s)
+    global _metrics_snap_thread
+    _metrics_snap_stop.clear()
+    _metrics_snap_thread = threading.Thread(
+        target=_metrics_snapshot_loop, args=(60,), daemon=True, name="metrics-snapshot"
+    )
+    _metrics_snap_thread.start()
     yield
+    _metrics_snap_stop.set()
+    if _metrics_snap_thread:
+        _metrics_snap_thread.join(timeout=5)
     _graph_sync_stop.set()
     if _graph_sync_thread:
         _graph_sync_thread.join(timeout=5)
@@ -355,6 +383,18 @@ class FileUploadRequest(BaseModel):
 class ImportRequest(BaseModel):
     conversations: List[Dict[str, Any]]
 
+class SessionCreateRequest(BaseModel):
+    session_id: Optional[str] = None
+    name: Optional[str] = ""
+    user_id: Optional[str] = ""
+    metadata: Optional[Dict[str, Any]] = None
+
+class SessionUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    user_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    touch: Optional[bool] = False
+
 class GenerateRequest(BaseModel):
     model: str = ""
     prompt: str
@@ -372,10 +412,13 @@ class MemorySearchRequest(BaseModel):
     query: str
     limit: int = 5
     min_score: float = 0.0
+    workspace_id: Optional[str] = None
+    agent: Optional[str] = None
 
 class MemoryStoreRequest(BaseModel):
     agent: str = "default"
     thought: str
+    workspace_id: str = "default"
 
 class EmbeddingRequest(BaseModel):
     input: Union[str, List[str]]
@@ -448,7 +491,8 @@ def unload_model(name: str = Query(..., description="Model name to unload")):
 def memory_search(req: MemorySearchRequest):
     try:
         import database as db
-        results = db.retrieve_similar(req.query, req.limit, min_score=req.min_score)
+        results = db.retrieve_similar(req.query, req.limit, min_score=req.min_score,
+                                      workspace_id=req.workspace_id, agent_filter=req.agent)
         return {"results": results, "count": len(results)}
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -458,7 +502,7 @@ def memory_search(req: MemorySearchRequest):
 def memory_store(req: MemoryStoreRequest):
     try:
         import database as db
-        db.store_thought(req.agent, req.thought)
+        db.store_thought(req.agent, req.thought, workspace_id=req.workspace_id)
         return {"status": "stored"}
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -487,30 +531,32 @@ def db_stats_api():
 
 
 @app.get("/v1/memory/recent")
-def memory_recent(limit: int = Query(default=20, le=100), agent: Optional[str] = None):
+def memory_recent(limit: int = Query(default=20, le=100), agent: Optional[str] = None,
+                  workspace_id: Optional[str] = None):
     try:
         import database as db
-        results = db.recent_memories(limit=limit, agent=agent)
+        results = db.recent_memories(limit=limit, agent=agent, workspace_id=workspace_id)
         return {"results": results, "count": len(results)}
     except Exception as e:
         raise HTTPException(500, str(e))
 
 
 @app.post("/v1/memory/clear")
-def memory_clear():
+def memory_clear(workspace_id: Optional[str] = None):
     try:
         import database as db
-        deleted = db.clear_memories()
+        deleted = db.clear_memories(workspace_id=workspace_id)
         return {"status": "cleared", "deleted": deleted}
     except Exception as e:
         raise HTTPException(500, str(e))
 
 
 @app.post("/v1/memory/prune")
-def memory_prune(max_age_days: Optional[int] = None):
+def memory_prune(max_age_days: Optional[int] = None, workspace_id: Optional[str] = None):
     try:
         import database as db
-        deleted = db.prune_memories(max_age_days or CONFIG.prune_max_age_days)
+        deleted = db.prune_memories(max_age_days or CONFIG.prune_max_age_days,
+                                    workspace_id=workspace_id)
         return {"status": "pruned", "deleted": deleted}
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -612,6 +658,39 @@ def api_metrics():
     return metrics.snapshot()
 
 
+@app.get("/v1/metrics/history")
+def api_metrics_history(limit: int = Query(default=60, ge=1, le=500)):
+    try:
+        import database as db
+        return {"snapshots": db.list_metrics_snapshots(limit=limit)}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/v1/metrics/history")
+def api_save_metrics_history(snapshot: dict):
+    try:
+        import database as db
+        ok = db.save_metrics_snapshot(snapshot)
+        if not ok:
+            raise HTTPException(400, "empty snapshot rejected")
+        return {"status": "saved"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/v1/metrics/history/prune")
+def api_prune_metrics_history(max_rows: int = Query(default=500, ge=1, le=5000)):
+    try:
+        import database as db
+        deleted = db.prune_metrics_snapshots(max_rows)
+        return {"status": "pruned", "deleted": deleted}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @app.get("/v1/router/stats")
 def router_stats():
     return orchestrator.router.harness.stats()
@@ -678,6 +757,13 @@ def get_config():
         "harness": {
             "epsilon": CONFIG.harness_epsilon,
             "decay": CONFIG.harness_decay,
+        },
+        "embedder": {
+            "provider": CONFIG.embedder.get("provider", "local"),
+            "model": CONFIG.embedder.get("model", "all-MiniLM-L6-v2"),
+            "dimension": CONFIG.embedder.get("dimension", 384),
+            "base_url": CONFIG.embedder.get("base_url", ""),
+            "has_api_key": bool(CONFIG.embedder.get("api_key")),
         },
         "gen": {
             "timeout_s": CONFIG.gen_timeout_s,
@@ -862,6 +948,55 @@ def update_config(req: ConfigUpdate):
             CONFIG.rate_limit[attr] = v
             return {"status": "updated", "key": req.key, "value": v}
         raise HTTPException(400, f"Unsupported rate_limit key: {attr}")
+    if req.key.startswith("embedder."):
+        attr = req.key.split(".")[1]
+        if attr == "provider":
+            provider = str(req.value).strip().lower()
+            if provider not in ("local", "openai", "azure", "openrouter", "groq", "gemini"):
+                raise HTTPException(400, "embedder.provider must be local/openai/azure/openrouter/groq/gemini")
+            CONFIG.embedder["provider"] = provider
+            try:
+                import database as _db
+                _db.reset_embedder()
+            except Exception:
+                pass
+            return {"status": "updated", "key": req.key, "value": CONFIG.embedder["provider"]}
+        if attr == "model":
+            CONFIG.embedder["model"] = str(req.value).strip()
+            try:
+                import database as _db
+                _db.reset_embedder()
+            except Exception:
+                pass
+            return {"status": "updated", "key": req.key, "value": CONFIG.embedder["model"]}
+        if attr == "dimension":
+            v = int(req.value)
+            if v < 64 or v > 8192:
+                raise HTTPException(400, "embedder.dimension must be between 64 and 8192")
+            CONFIG.embedder["dimension"] = v
+            try:
+                import database as _db
+                _db.reset_embedder()
+            except Exception:
+                pass
+            return {"status": "updated", "key": req.key, "value": v}
+        if attr == "api_key":
+            CONFIG.embedder["api_key"] = str(req.value).strip()
+            try:
+                import database as _db
+                _db.reset_embedder()
+            except Exception:
+                pass
+            return {"status": "updated", "key": req.key, "value": bool(CONFIG.embedder["api_key"])}
+        if attr == "base_url":
+            CONFIG.embedder["base_url"] = str(req.value).strip()
+            try:
+                import database as _db
+                _db.reset_embedder()
+            except Exception:
+                pass
+            return {"status": "updated", "key": req.key, "value": CONFIG.embedder["base_url"]}
+        raise HTTPException(400, f"Unsupported embedder key: {attr}")
     if req.key not in key_map and not req.key.startswith("model."):
         raise HTTPException(400, f"Unknown config key: {req.key}")
 
@@ -939,6 +1074,95 @@ def _update_model_config(key: str, value):
     elif attr in ("max_tokens", "n_ctx"):
         setattr(mc, attr, max(16, int(value)))
     return {"status": "updated", "key": key, "value": getattr(mc, attr)}
+
+# ---------- Session API (persisted multi-user contexts) ----------
+
+@app.get("/v1/sessions")
+def api_list_sessions(
+    limit: int = Query(default=100, ge=1, le=500),
+    user_id: Optional[str] = Query(default=None),
+):
+    try:
+        import database as db
+        return {"sessions": db.list_sessions(limit=limit, user_id=user_id)}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/v1/sessions")
+def api_create_session(req: SessionCreateRequest):
+    try:
+        import database as db
+        sess = db.create_session(
+            req.session_id or "", req.name or "", req.user_id or "", req.metadata
+        )
+        logger.info(f"Session created: {sess['id']}")
+        return {"session": sess, "id": sess["id"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/v1/sessions/{session_id}")
+def api_get_session(session_id: str):
+    try:
+        import database as db
+        sess = db.get_session(session_id)
+        if sess is None:
+            raise HTTPException(404, f"Session '{session_id}' not found")
+        return {"session": sess}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/v1/sessions/{session_id}/update")
+def api_update_session(session_id: str, req: SessionUpdateRequest):
+    try:
+        import database as db
+        sess = db.get_session(session_id)
+        if sess is None:
+            raise HTTPException(404, f"Session '{session_id}' not found")
+        if req.touch:
+            db.touch_session(session_id)
+        updated = db.create_session(
+            session_id,
+            req.name if req.name is not None else sess.get("name", ""),
+            req.user_id if req.user_id is not None else sess.get("user_id", ""),
+            req.metadata if req.metadata is not None else sess.get("metadata", {}),
+        )
+        return {"status": "updated", "session": updated}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.delete("/v1/sessions/{session_id}")
+def api_delete_session(session_id: str):
+    try:
+        import database as db
+        ok = db.delete_session(session_id)
+        if not ok:
+            raise HTTPException(404, f"Session '{session_id}' not found")
+        return {"status": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/v1/sessions/prune")
+def api_prune_sessions(max_age_days: int = Query(default=30, ge=1, le=3650)):
+    try:
+        import database as db
+        deleted = db.prune_sessions(max_age_days)
+        return {"status": "pruned", "deleted": deleted}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
 
 # ---------- Workspace API ----------
 
