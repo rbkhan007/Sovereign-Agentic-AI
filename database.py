@@ -154,6 +154,14 @@ def get_pool():
     return _pool
 
 
+def db_ready() -> bool:
+    """True when a live pool is connected (DB enabled + pool built). Never
+    triggers a connection attempt on its own — used as a cheap guard for
+    optional DB-backed features (e.g. conversation persistence)."""
+    with _pool_lock:
+        return bool(CONFIG.db.enabled and _pool is not None)
+
+
 def enable_if_available(timeout: float = 3.0) -> bool:
     """Probe the configured PostgreSQL server at startup and run on it when reachable.
 
@@ -314,6 +322,24 @@ def _ensure_schema():
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL DEFAULT 'default',
+                    system_prompt TEXT DEFAULT '',
+                    created_at DOUBLE PRECISION DEFAULT 0,
+                    updated_at DOUBLE PRECISION DEFAULT 0
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS conversation_messages (
+                    id BIGSERIAL PRIMARY KEY,
+                    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp DOUBLE PRECISION NOT NULL
+                );
+            """)
             conn.commit()
             _seed_default_workspace(conn)
         try:
@@ -347,6 +373,14 @@ def _ensure_schema():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_workspace_files_ws
                 ON workspace_files (workspace_id);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_conversation_messages_conv
+                ON conversation_messages (conversation_id, id);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_conversations_ws
+                ON conversations (workspace_id);
             """)
             conn.commit()
         if not _ivfflat_attempted:
@@ -773,6 +807,7 @@ def db_stats() -> Dict[str, Any]:
         "hnsw": False,
         "table_bytes": 0,
         "cache_entries": 0,
+        "conversations": 0,
         "pool": {"min": 1, "max": CONFIG.db.maxconn, "active": 0},
         "auto_prune": False,
         "prune_interval_hours": CONFIG.prune_interval_hours,
@@ -797,6 +832,8 @@ def db_stats() -> Dict[str, Any]:
             info["total_tokens"] = row[1] or 0
             cur.execute("SELECT agent_name, COUNT(*) FROM agent_memory GROUP BY agent_name ORDER BY 2 DESC, 1")
             info["agents"] = {r[0]: r[1] for r in cur.fetchall()}
+            cur.execute("SELECT COUNT(*) FROM conversations")
+            info["conversations"] = cur.fetchone()[0] or 0
             cur.execute("SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'idx_agent_memory_ivfflat'")
             info["ivfflat"] = (cur.fetchone()[0] or 0) > 0
             cur.execute("SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'idx_agent_memory_hnsw'")
@@ -1130,6 +1167,7 @@ def delete_workspace(workspace_id: str) -> bool:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM workspace_files WHERE workspace_id = %s", (workspace_id,))
             cur.execute("DELETE FROM agent_memory WHERE agent_name = %s", (_ws_agent_name(workspace_id),))
+            cur.execute("DELETE FROM conversations WHERE workspace_id = %s", (workspace_id,))
             cur.execute("DELETE FROM workspaces WHERE id = %s", (workspace_id,))
             deleted = cur.rowcount
             conn.commit()
@@ -1143,6 +1181,222 @@ def delete_workspace(workspace_id: str) -> bool:
         except Exception:
             pass
         return False
+
+
+# ---------- DB-backed conversations (in-memory fallback when DB off) ----------
+
+def save_conversation(conv_id: str, workspace_id: str = "default",
+                      system_prompt: Optional[str] = "") -> bool:
+    """Upsert a conversation row (workspace + system prompt). Returns True when
+    written, False when the DB is unavailable or the write failed."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO conversations (id, workspace_id, system_prompt, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    workspace_id = EXCLUDED.workspace_id,
+                    system_prompt = EXCLUDED.system_prompt,
+                    updated_at = EXCLUDED.updated_at
+            """, (conv_id, workspace_id, system_prompt or "", time.time(), time.time()))
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Save conversation: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def append_conversation_message(conv_id: str, workspace_id: str = "default",
+                                role: str = "user", content: str = "") -> bool:
+    """Persist a single message to a conversation (upserts the conversation row
+    so it exists even when first touched through a message)."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO conversations (id, workspace_id, created_at, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    workspace_id = EXCLUDED.workspace_id,
+                    updated_at = EXCLUDED.updated_at
+            """, (conv_id, workspace_id, time.time(), time.time()))
+            cur.execute("""
+                INSERT INTO conversation_messages (conversation_id, role, content, timestamp)
+                VALUES (%s, %s, %s, %s)
+            """, (conv_id, role, content, time.time()))
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Append conversation message: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def load_conversation(conv_id: str) -> Optional[Dict[str, Any]]:
+    """Load a conversation row + all messages, or None when absent/DB off."""
+    conn = _get_conn()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT workspace_id, system_prompt, created_at FROM conversations WHERE id = %s",
+                (conv_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            conv = {
+                "id": conv_id,
+                "workspace_id": row[0],
+                "system_prompt": row[1] or "",
+                "created_at": row[2] or 0.0,
+                "messages": [],
+            }
+            cur.execute(
+                "SELECT role, content, timestamp FROM conversation_messages "
+                "WHERE conversation_id = %s ORDER BY id ASC",
+                (conv_id,),
+            )
+            for r in cur.fetchall():
+                conv["messages"].append({"role": r[0], "content": r[1], "timestamp": r[2]})
+            return conv
+    except Exception as e:
+        logger.warning(f"Load conversation: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def list_conversations(workspace_id: str = "default") -> List[Dict[str, Any]]:
+    """List conversation ids + created_at for a workspace, newest first."""
+    conn = _get_conn()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, created_at FROM conversations WHERE workspace_id = %s "
+                "ORDER BY updated_at DESC, created_at DESC",
+                (workspace_id,),
+            )
+            return [{"id": r[0], "created_at": r[1] or 0.0} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning(f"List conversations: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def clear_conversation_messages(conv_id: str) -> bool:
+    """Delete all messages for a conversation (keeps the conversation row)."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM conversation_messages WHERE conversation_id = %s", (conv_id,))
+            cur.execute("UPDATE conversations SET system_prompt = '', updated_at = %s WHERE id = %s",
+                        (time.time(), conv_id))
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Clear conversation messages: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def delete_conversation(conv_id: str) -> bool:
+    """Delete a conversation row (messages cascade via FK)."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM conversations WHERE id = %s", (conv_id,))
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Delete conversation: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def reassign_conversation(conv_id: str, new_workspace_id: str) -> bool:
+    """Move a conversation (and its messages) into another workspace."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE conversations SET workspace_id = %s, updated_at = %s WHERE id = %s",
+                        (new_workspace_id, time.time(), conv_id))
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Reassign conversation: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def delete_workspace_conversations(workspace_id: str) -> bool:
+    """Delete every conversation belonging to a workspace (messages cascade)."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM conversations WHERE workspace_id = %s", (workspace_id,))
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Delete workspace conversations: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
 
 
 def list_workspace_files(workspace_id: str) -> List[Dict[str, Any]]:

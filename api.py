@@ -1453,7 +1453,7 @@ def import_workspace(ws_id: str, req: ImportRequest):
         imported = 0
         for c in req.conversations:
             cid = str(c.get("id") or f"import-{uuid.uuid4().hex[:8]}")
-            existing = memory_manager.conversations.get(cid)
+            existing = memory_manager.get(cid)
             if existing is not None and existing.workspace_id != ws_id:
                 memory_manager.reassign_workspace(cid, ws_id)
             conv = memory_manager.get_or_create(cid, ws_id)
@@ -1613,7 +1613,7 @@ def chat_history(
     limit: int = Query(default=50, le=200),
     workspace_id: str = Query(default="default"),
 ):
-    conv = memory_manager.conversations.get(conv_id)
+    conv = memory_manager.get(conv_id)
     if conv is None:
         return {
             "conversation_id": conv_id,
@@ -1641,7 +1641,7 @@ def chat_history(
 
 @app.post("/v1/chat/clear")
 def chat_clear(conv_id: str = "default", workspace_id: str = Query(default="default")):
-    conv = memory_manager.conversations.get(conv_id)
+    conv = memory_manager.get(conv_id)
     if conv is not None and conv.workspace_id == workspace_id:
         memory_manager.delete(conv_id)
     return {"status": "cleared", "conversation_id": conv_id, "workspace_id": workspace_id}
@@ -1649,7 +1649,7 @@ def chat_clear(conv_id: str = "default", workspace_id: str = Query(default="defa
 
 @app.delete("/v1/chat/conversations")
 def chat_delete(conv_id: str = Query(...), workspace_id: str = Query(default="default")):
-    conv = memory_manager.conversations.get(conv_id)
+    conv = memory_manager.get(conv_id)
     if conv is None or conv.workspace_id != workspace_id:
         raise HTTPException(404, "Conversation not found")
     memory_manager.delete(conv_id)

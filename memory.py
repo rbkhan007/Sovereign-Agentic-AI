@@ -26,15 +26,26 @@ class Conversation:
         self.created_at: float = time.time()
         self.workspace_id: str = workspace_id
         self._lock = threading.Lock()
+        self._persist = None  # Optional[Callable[[str, dict], None]] write-through hook
 
     def set_system(self, prompt: str):
         self.system_prompt = prompt
+        if self._persist:
+            try:
+                self._persist("system", {"prompt": prompt})
+            except Exception:
+                pass
 
     def add(self, role: str, content: str):
         with self._lock:
             self.messages.append(Message(role, content))
             if len(self.messages) > self.max_history:
                 self.messages = self.messages[-self.max_history:]
+        if self._persist:
+            try:
+                self._persist("add", {"role": role, "content": content})
+            except Exception:
+                pass
 
     def get_context(self, include_system: bool = True, open_assistant: bool = True) -> str:
         with self._lock:
@@ -62,6 +73,11 @@ class Conversation:
         with self._lock:
             self.messages.clear()
             self.system_prompt = None
+        if self._persist:
+            try:
+                self._persist("clear", {})
+            except Exception:
+                pass
 
 
 class MemoryManager:
@@ -70,6 +86,41 @@ class MemoryManager:
         self._access: Dict[str, float] = {}
         self._workspace_index: Dict[str, set] = {}
         self._lock = threading.Lock()
+
+    def _db(self):
+        """Return the database module when DB-backed conversations are live,
+        else None. Cheap: checks the pool without attempting a connection."""
+        try:
+            import database as _db
+            if _db.db_ready():
+                return _db
+        except Exception:
+            pass
+        return None
+
+    def _make_persist(self, conv_id: str, conv: "Conversation"):
+        """Build a write-through hook that persists conversation changes to DB.
+        Returns None when the DB is unavailable (in-memory fallback). Reads the
+        conversation's current workspace so reassigns stay consistent."""
+        db = self._db()
+        if db is None:
+            return None
+
+        def _persist(event: str, data: dict):
+            try:
+                ws = conv.workspace_id
+                if event == "add":
+                    db.append_conversation_message(
+                        conv_id, ws, data.get("role") or "user", data.get("content") or ""
+                    )
+                elif event == "system":
+                    db.save_conversation(conv_id, ws, system_prompt=data.get("prompt"))
+                elif event == "clear":
+                    db.clear_conversation_messages(conv_id)
+            except Exception:
+                pass
+
+        return _persist
 
     def _evict_if_needed(self):
         while len(self.conversations) >= _MAX_CONVS:
@@ -87,19 +138,77 @@ class MemoryManager:
                 break
 
     def get(self, conv_id: str) -> Optional[Conversation]:
-        """Return the conversation for a conv_id if it exists, else None."""
+        """Return the conversation for a conv_id if it exists (hydrating from
+        DB when available), else None. Does not create a conversation."""
         with self._lock:
-            return self.conversations.get(conv_id)
+            conv = self.conversations.get(conv_id)
+        if conv is not None:
+            return conv
+        conv = self._load_from_db(conv_id)
+        if conv is None:
+            return None
+        with self._lock:
+            existing = self.conversations.get(conv_id)
+            if existing is not None:
+                return existing
+            self._access[conv_id] = time.time()
+            self.conversations[conv_id] = conv
+            self._workspace_index.setdefault(conv.workspace_id, set()).add(conv_id)
+        return conv
+
+    def _build_from_data(self, conv_id: str, data: dict) -> Conversation:
+        """Rebuild an in-memory Conversation from a DB row (no registration)."""
+        ws = data.get("workspace_id") or "default"
+        conv = Conversation(workspace_id=ws)
+        conv.system_prompt = data.get("system_prompt") or None
+        conv.created_at = data.get("created_at") or conv.created_at
+        for m in data.get("messages") or []:
+            conv.messages.append(Message(m.get("role"), m.get("content"), m.get("timestamp")))
+        conv._persist = self._make_persist(conv_id, conv)
+        return conv
+
+    def _load_from_db(self, conv_id: str) -> Optional[Conversation]:
+        """Try to load a conversation from the DB. Returns None when the DB is
+        unavailable or the conversation does not exist."""
+        db = self._db()
+        if db is None:
+            return None
+        try:
+            data = db.load_conversation(conv_id)
+        except Exception:
+            return None
+        if not data:
+            return None
+        return self._build_from_data(conv_id, data)
+
+    def _hydrate(self, conv_id: str, data: dict) -> Conversation:
+        """Rebuild an in-memory Conversation from a DB row and register it."""
+        conv = self._build_from_data(conv_id, data)
+        with self._lock:
+            self._access[conv_id] = time.time()
+            self.conversations[conv_id] = conv
+            self._workspace_index.setdefault(conv.workspace_id, set()).add(conv_id)
+        return conv
 
     def get_or_create(self, conv_id: str, workspace_id: str = "default") -> Conversation:
         with self._lock:
             self._access[conv_id] = time.time()
-            if conv_id not in self.conversations:
-                if len(self.conversations) >= _MAX_CONVS:
-                    self._evict_if_needed()
-                self.conversations[conv_id] = Conversation(workspace_id=workspace_id)
-                self._workspace_index.setdefault(workspace_id, set()).add(conv_id)
-            return self.conversations[conv_id]
+            existing = self.conversations.get(conv_id)
+            if existing is not None:
+                return existing
+            if len(self.conversations) >= _MAX_CONVS:
+                self._evict_if_needed()
+        conv = self._load_from_db(conv_id)
+        if conv is None:
+            conv = Conversation(workspace_id=workspace_id)
+            conv._persist = self._make_persist(conv_id, conv)
+        with self._lock:
+            existing = self.conversations.get(conv_id)
+            if existing is not None:
+                return existing
+            self.conversations[conv_id] = conv
+            self._workspace_index.setdefault(conv.workspace_id, set()).add(conv_id)
+        return conv
 
     def delete(self, conv_id: str):
         with self._lock:
@@ -109,6 +218,12 @@ class MemoryManager:
                 ws_set = self._workspace_index.get(conv.workspace_id)
                 if ws_set:
                     ws_set.discard(conv_id)
+        db = self._db()
+        if db is not None:
+            try:
+                db.delete_conversation(conv_id)
+            except Exception:
+                pass
 
     def reassign_workspace(self, conv_id: str, new_workspace_id: str):
         """Move an existing conversation into another workspace (used by import)."""
@@ -124,6 +239,12 @@ class MemoryManager:
                 if not old_set:
                     self._workspace_index.pop(old_ws, None)
             self._workspace_index.setdefault(new_workspace_id, set()).add(conv_id)
+        db = self._db()
+        if db is not None:
+            try:
+                db.reassign_conversation(conv_id, new_workspace_id)
+            except Exception:
+                pass
 
     def delete_workspace(self, workspace_id: str):
         with self._lock:
@@ -132,8 +253,30 @@ class MemoryManager:
                 self.conversations.pop(cid, None)
                 self._access.pop(cid, None)
             self._workspace_index.pop(workspace_id, None)
+        db = self._db()
+        if db is not None:
+            try:
+                db.delete_workspace_conversations(workspace_id)
+            except Exception:
+                pass
 
     def conversations_for(self, workspace_id: str = "default") -> List[tuple]:
+        db = self._db()
+        if db is not None:
+            try:
+                for rec in db.list_conversations(workspace_id):
+                    cid = rec.get("id")
+                    with self._lock:
+                        exists = cid in self.conversations
+                    if not exists:
+                        try:
+                            data = db.load_conversation(cid)
+                        except Exception:
+                            data = None
+                        if data:
+                            self._hydrate(cid, data)
+            except Exception:
+                pass
         with self._lock:
             ids = self._workspace_index.get(workspace_id, set())
             return [(cid, self.conversations[cid]) for cid in ids if cid in self.conversations]
