@@ -32,6 +32,21 @@ _openai_calls: List[float] = []
 _openai_failures: List[float] = []
 _openai_ratelimit_lock = threading.Lock()
 
+_tiktoken_cache: Dict[str, Any] = {}
+
+
+def _tiktoken_encoder(model: str):
+    """Return a cached tiktoken encoder for `model`, or None when unavailable."""
+    if model not in _tiktoken_cache:
+        enc = None
+        try:
+            import tiktoken  # optional dependency (lazy)
+            enc = tiktoken.encoding_for_model(model)
+        except Exception:
+            enc = None
+        _tiktoken_cache[model] = enc
+    return _tiktoken_cache.get(model)
+
 
 def _openai_can_call() -> bool:
     """Check the sliding-window OpenAI rate limit (default 10 calls/min)."""
@@ -454,6 +469,31 @@ class ModelManager:
         if not last:
             return ""
         return self.generate(name, last[-1]["content"], max_tokens, temperature)
+
+    def count_tokens(self, text: str, name: Optional[str] = None) -> int:
+        """Count tokens for `text` using the most accurate tokenizer available.
+
+        Uses the loaded llama.cpp instance's real tokenizer for local models,
+        tiktoken (if installed) for OpenAI/cloud models, and falls back to a
+        whitespace split so reporting never fails even when no tokenizer is
+        available (e.g. a model that is not currently loaded).
+        """
+        if not text:
+            return 0
+        if name:
+            llm = self.instances.get(name)
+            if llm is not None and hasattr(llm, "tokenize"):
+                try:
+                    return len(llm.tokenize(text.encode("utf-8"), add_bos=False))
+                except Exception:
+                    pass
+            enc = _tiktoken_encoder(name.replace("openai/", ""))
+            if enc is not None:
+                try:
+                    return len(enc.encode(text))
+                except Exception:
+                    pass
+        return len(text.split())
 
     def unload(self, name: str):
         lock = self._get_lock(name)

@@ -1697,8 +1697,8 @@ def raw_generate(req: GenerateRequest):
                 {"text": text, "index": 0, "finish_reason": "stop"}
             ],
             "usage": {
-                "prompt_tokens": len(req.prompt.split()),
-                "completion_tokens": len(text.split()),
+                "prompt_tokens": model_manager.count_tokens(req.prompt, model),
+                "completion_tokens": model_manager.count_tokens(text, model),
             },
         }
     except Exception as e:
@@ -1854,6 +1854,9 @@ def _full_response(req, user_msg, conv_id, system, workspace_id):
         logger.exception("Orch error")
         raise HTTPException(500, str(e))
     content = result.get("response") or ""
+    usage_model = result.get("model") or req.model or "local"
+    prompt_tokens = model_manager.count_tokens(user_msg, usage_model)
+    completion_tokens = model_manager.count_tokens(content, usage_model)
     resp = {
         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
         "object": "chat.completion",
@@ -1869,9 +1872,9 @@ def _full_response(req, user_msg, conv_id, system, workspace_id):
         "thinking": result.get("thinking") or None,
         "conversation_id": conv_id,
         "usage": {
-            "prompt_tokens": len(user_msg.split()),
-            "completion_tokens": len(content.split()),
-            "total_tokens": len(user_msg.split()) + len(content.split()),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
         },
     }
     if result.get("parallel_candidates"):
@@ -1907,8 +1910,10 @@ def _stream_response(req, user_msg, conv_id, system, workspace_id):
         model = req.model or "local"
         created = int(time.time())
         sid = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        parts = []
 
-        def chunk(delta: Optional[str] = None, finish: Optional[str] = None, thinking: Optional[str] = None):
+        def chunk(delta: Optional[str] = None, finish: Optional[str] = None, thinking: Optional[str] = None,
+                  usage: Optional[dict] = None):
             body = {
                 "id": sid,
                 "object": "chat.completion.chunk",
@@ -1920,6 +1925,8 @@ def _stream_response(req, user_msg, conv_id, system, workspace_id):
                     "finish_reason": finish,
                 }],
             }
+            if usage:
+                body["usage"] = usage
             if thinking:
                 body["thinking"] = thinking
             return f"data: {json.dumps(body)}\n\n"
@@ -1950,7 +1957,10 @@ def _stream_response(req, user_msg, conv_id, system, workspace_id):
                     break
                 etype = evt.get("type")
                 content = evt.get("content") or ""
+                if etype == "start" and evt.get("model"):
+                    model = evt["model"]
                 if etype == "response" and content:
+                    parts.append(content)
                     yield chunk(delta=content)
                 elif etype in ("thinking", "start") and content:
                     yield chunk(thinking=content)
@@ -1958,7 +1968,14 @@ def _stream_response(req, user_msg, conv_id, system, workspace_id):
             stop.set()
             if not task.done():
                 task.cancel()
-        yield chunk(finish="stop")
+        completion = "".join(parts)
+        prompt_usage = model_manager.count_tokens(user_msg, model)
+        completion_usage = model_manager.count_tokens(completion, model)
+        yield chunk(finish="stop", usage={
+            "prompt_tokens": prompt_usage,
+            "completion_tokens": completion_usage,
+            "total_tokens": prompt_usage + completion_usage,
+        })
         yield "data: [DONE]\n\n"
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -1992,11 +2009,23 @@ async def chat_stream_full(req: ChatRequest):
             stop,
         )
         try:
+            parts = []
+            model = req.model or "local"
             while True:
                 evt = await queue.get()
                 if evt.get("type") == "done":
                     break
+                if evt.get("type") == "start" and evt.get("model"):
+                    model = evt["model"]
+                if evt.get("type") == "response":
+                    parts.append(evt.get("content") or "")
                 yield f"data: {json.dumps(evt)}\n\n"
+            completion = "".join(parts)
+            prompt_usage = model_manager.count_tokens(user_msg, model)
+            completion_usage = model_manager.count_tokens(completion, model)
+            usage_evt = {"type": "usage", "model": model, "prompt_tokens": prompt_usage,
+                         "completion_tokens": completion_usage, "total_tokens": prompt_usage + completion_usage}
+            yield f"data: {json.dumps(usage_evt)}\n\n"
         finally:
             stop.set()
             if not task.done():
@@ -2038,11 +2067,23 @@ async def chat_auto_stream(req: ChatRequest):
             stop,
         )
         try:
+            parts = []
+            model = req.model or "local"
             while True:
                 evt = await queue.get()
                 if evt.get("type") == "done":
                     break
+                if evt.get("type") == "start" and evt.get("model"):
+                    model = evt["model"]
+                if evt.get("type") == "response":
+                    parts.append(evt.get("content") or "")
                 yield f"data: {json.dumps(evt)}\n\n"
+            completion = "".join(parts)
+            prompt_usage = model_manager.count_tokens(user_msg, model)
+            completion_usage = model_manager.count_tokens(completion, model)
+            usage_evt = {"type": "usage", "model": model, "prompt_tokens": prompt_usage,
+                         "completion_tokens": completion_usage, "total_tokens": prompt_usage + completion_usage}
+            yield f"data: {json.dumps(usage_evt)}\n\n"
         finally:
             stop.set()
             if not task.done():
