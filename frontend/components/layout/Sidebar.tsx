@@ -76,14 +76,14 @@ export default function Sidebar() {
         <div className="flex items-center gap-2.5">
           {!collapsed ? (
             <>
-              <img src="/logo.svg" alt="Sovereign-Agentic-AI" className="w-9 h-9 object-contain shrink-0" />
+              <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-accent to-accent-2 flex items-center justify-center text-white text-sm font-bold shadow-lg shadow-accent/30 shrink-0">A</span>
               <div className="min-w-0">
                 <h1 className="text-sm font-bold tracking-tight gradient-text truncate">Agentic LLM</h1>
                 <p className="text-[10px] text-text-muted">Local · Fast · Private</p>
               </div>
             </>
           ) : (
-            <img src="/logo.svg" alt="Sovereign-Agentic-AI" className="w-9 h-9 object-contain mx-auto shrink-0" />
+            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-accent to-accent-2 flex items-center justify-center text-white text-sm font-bold shadow-lg shadow-accent/30 mx-auto">A</span>
           )}
         </div>
       </div>

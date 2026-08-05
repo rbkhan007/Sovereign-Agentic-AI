@@ -1,4 +1,5 @@
 import hashlib
+import html
 import json
 import logging
 import os
@@ -15,6 +16,15 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 NEXT_BUILD_DIR = os.path.join(FRONTEND_DIR, "build")
+
+_ASCII_ART_TEXT = ""
+_ASCII_ART_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "public", "ascii-art.txt")
+if os.path.isfile(_ASCII_ART_PATH):
+    try:
+        with open(_ASCII_ART_PATH, "r", encoding="utf-8") as _fh:
+            _ASCII_ART_TEXT = _fh.read()
+    except (OSError, UnicodeDecodeError):
+        _ASCII_ART_TEXT = ""
 
 _CACHE_LOCK = threading.Lock()
 _CACHE = {"mtime": None, "size": None, "html": None, "etag": None}
@@ -69,6 +79,9 @@ FALLBACK_PAGE = """<!DOCTYPE html>
   .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
            gap: 12px; color: #9898b0; }
   .empty h2 { color: #e8e8f0; font-size: 20px; }
+  .ascii-logo { font-family: 'Courier New', monospace; font-size: 7px; line-height: 1.1;
+                color: #6c63ff; opacity: 0.9; max-width: 100%; overflow-x: auto;
+                white-space: pre; user-select: none; }
   .input-area { padding: 16px 20%; background: #1a1a2e; border-top: 1px solid #2a2a4a; }
   @media (max-width: 900px) { .input-area { padding: 12px 16px; } }
   .input-wrap { max-width: 780px; margin: 0 auto; display: flex; gap: 10px;
@@ -88,7 +101,7 @@ FALLBACK_PAGE = """<!DOCTYPE html>
 </div>
 <div class="chat" id="chat">
   <div class="empty" id="empty">
-    <div style="font-size:48px">&#129302;</div>
+    <pre class="ascii-logo">__ASCII_ART__</pre>
     <h2>How can I help you today?</h2>
     <p>Multi-agent system running 100% locally on your GPU</p>
     <p>Rhasan Indie's Dashboard | Model | VRAM | Chat</p>
@@ -191,6 +204,8 @@ loadModels();
 </body>
 </html>
 """
+
+FALLBACK_PAGE = FALLBACK_PAGE.replace("__ASCII_ART__", html.escape(_ASCII_ART_TEXT))
 
 
 def _is_loopback(request: Request) -> bool:
@@ -363,10 +378,6 @@ def create_web_app(api_app: FastAPI) -> FastAPI:
     @api_app.get("/favicon.svg", include_in_schema=False)
     async def favicon():
         return _serve_public_asset("favicon.svg")
-
-    @api_app.get("/logo.svg", include_in_schema=False)
-    async def logo_svg():
-        return _serve_public_asset("logo.svg", FAVICON_SVG)
 
     @api_app.get("/chat", include_in_schema=False)
     @api_app.get("/", include_in_schema=False)
