@@ -116,7 +116,7 @@ FALLBACK_PAGE = """<!DOCTYPE html>
 </div>
 <div class="chat" id="chat">
   <div class="empty" id="empty">
-    <pre class="ascii-logo">__ASCII_ART__</pre>
+    <img src="/static/ascii-logo.png" alt="Sovereign Agentic AI" style="max-width:340px;width:100%;height:auto" />
     <h2>How can I help you today?</h2>
     <p>Multi-agent system running 100% locally on your GPU</p>
     <p>Rhasan Indie's Dashboard | Model | VRAM | Chat</p>
@@ -397,6 +397,24 @@ def create_web_app(api_app: FastAPI) -> FastAPI:
     async def favicon():
         return _serve_public_asset("favicon.svg")
 
+    @api_app.get("/ascii-logo.png", include_in_schema=False)
+    async def ascii_logo():
+        # Legacy/cached pages may still reference /ascii-logo.png; serve the
+        # canonical logo so the brand image never 404s.
+        path = os.path.join(_PUBLIC_DIR, "ascii-logo.png")
+        if not os.path.isfile(path):
+            path = os.path.join(STATIC_DIR, "ascii-logo.png")
+        if os.path.isfile(path):
+            with open(path, "rb") as fh:
+                data = fh.read()
+        else:
+            data = b""
+        return Response(
+            content=data,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
     @api_app.get("/chat", include_in_schema=False)
     @api_app.get("/", include_in_schema=False)
     @api_app.get("/workspace", include_in_schema=False)
@@ -406,6 +424,8 @@ def create_web_app(api_app: FastAPI) -> FastAPI:
     @api_app.get("/tools", include_in_schema=False)
     @api_app.get("/settings", include_in_schema=False)
     @api_app.get("/graph", include_in_schema=False)
+    @api_app.get("/terminal", include_in_schema=False)
+    @api_app.get("/dashboard", include_in_schema=False)
     @api_app.get("/help", include_in_schema=False)
     async def web_ui(request: Request):
         # HTML shells carry no data: auth is enforced on the /v1/* and /mcp

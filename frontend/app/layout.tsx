@@ -18,8 +18,18 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: 'Sovereign-Agentic-AI',
-  description: 'Local agentic LLM dashboard',
+  title: {
+    default: 'Sovereign-Agentic-AI',
+    template: '%s · Sovereign-Agentic-AI',
+  },
+  description:
+    'A private, offline-first multi-agent AI operating system — runs GGUF models 100% locally on your GPU with an Agentic Terminal, knowledge graph, workspaces, computer vision and image generation.',
+  keywords: [
+    'local LLM', 'multi-agent', 'GGUF', 'Vulkan', 'pgvector', 'knowledge graph',
+    'Agentic Terminal', 'AI workspace', 'offline AI', 'RAG', 'Agent X',
+  ],
+  authors: [{ name: 'Rakibul Hasan', url: 'https://github.com/rbkhan007' }],
+  applicationName: 'Sovereign-Agentic-AI',
 };
 
 const themeScript = `
@@ -44,7 +54,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
         <link rel="apple-touch-icon" href="/favicon.svg" />
-        <meta name="theme-color" content="#0F172A" />
+        <meta name="theme-color" content="#C9122B" />
       </head>
       <body className={`${inter.variable} font-sans bg-bg-primary text-text-primary transition-colors duration-200`}>
         <ThemeProvider>

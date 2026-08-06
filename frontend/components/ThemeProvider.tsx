@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 
 type Theme = 'dark' | 'light';
 
@@ -36,8 +36,19 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
+  const toggle = useCallback(() => {
+    // Freeze CSS transitions during the switch so every glass card / button /
+    // logo span doesn't animate at once (that's what causes theme-swap lag).
+    const root = document.documentElement;
+    root.classList.add('theme-transitioning');
+    setTheme(t => t === 'dark' ? 'light' : 'dark');
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => root.classList.remove('theme-transitioning'));
+    });
+  }, []);
+
   return (
-    <ThemeContext.Provider value={{ theme, toggle: () => setTheme(t => t === 'dark' ? 'light' : 'dark') }}>
+    <ThemeContext.Provider value={{ theme, toggle }}>
       {children}
     </ThemeContext.Provider>
   );

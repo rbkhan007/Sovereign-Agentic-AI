@@ -19,6 +19,17 @@ const LIGHT_TIER_COLORS = [
   '#f43f5e', // rose-500
 ];
 
+/* Neon tier palette for the animated (Dashboard) logo — cyan/violet/rose
+ * pops off the dark glass without washing out the art. */
+const NEON_TIER_COLORS = [
+  '#4a5068', // faint background dots
+  '#67e8f9', // cyan-300
+  '#a78bfa', // violet-400
+  '#e879f9', // fuchsia-400
+  '#22d3ee', // cyan-400
+  '#fb7185', // rose-400
+];
+
 /* Character → density tier (higher = more ink). Falls back to tier 2. */
 const TIER_MAP: Record<string, number> = {
   '.': 0, ',': 0, "'": 0, '`': 0, ' ': 0,
@@ -35,7 +46,9 @@ function tierOf(ch: string): number {
 
 /* Render the ASCII art as colored runs. Consecutive same-tier characters are
  * grouped into a single span so the DOM stays small (~a few hundred nodes). */
-function renderColoredArt(art: string, light: boolean): React.ReactNode[] {
+function renderColoredArt(art: string, light: boolean, neon: boolean): React.ReactNode[] {
+  const useInlineColors = light || neon;
+  const palette = neon && !light ? NEON_TIER_COLORS : LIGHT_TIER_COLORS;
   const lines = art.split('\n');
   return lines.map((line, li) => {
     const runs: { text: string; tier: number }[] = [];
@@ -53,8 +66,8 @@ function renderColoredArt(art: string, light: boolean): React.ReactNode[] {
         {runs.map((run, ri) => (
           <span
             key={ri}
-            style={light ? { color: LIGHT_TIER_COLORS[run.tier % LIGHT_TIER_COLORS.length] } : undefined}
-            className={light ? undefined : 'text-accent/70'}
+            style={useInlineColors ? { color: palette[run.tier % palette.length] } : undefined}
+            className={useInlineColors ? undefined : 'text-accent/70'}
           >
             {run.text}
           </span>
@@ -64,14 +77,14 @@ function renderColoredArt(art: string, light: boolean): React.ReactNode[] {
   });
 }
 
-export default function AsciiLogo() {
+export default function AsciiLogo({ animated = false }: { animated?: boolean }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
   const [scale, setScale] = useState(1);
   const { theme } = useTheme();
   const light = theme === 'light';
 
-  const colored = useMemo(() => renderColoredArt(asciiArt, light), [light]);
+  const colored = useMemo(() => renderColoredArt(asciiArt, light, animated), [light, animated]);
 
   useEffect(() => {
     const box = boxRef.current;
@@ -97,7 +110,7 @@ export default function AsciiLogo() {
   return (
     <div
       ref={boxRef}
-      className="ascii-logo relative w-full overflow-hidden select-none"
+      className={`ascii-logo relative w-full overflow-hidden select-none ${animated ? 'ascii-logo-animated' : ''}`}
       style={{ maxWidth: MAX_WIDTH_PX, aspectRatio: `${MAX_WIDTH_PX} / ${MAX_HEIGHT_PX}` }}
       aria-label="Agentic LLM ASCII logo"
     >

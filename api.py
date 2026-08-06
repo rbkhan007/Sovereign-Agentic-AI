@@ -1858,6 +1858,243 @@ async def computer_stream(req: ComputerRunRequest):
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
+# ---------- Agentic Terminal API ----------
+# Fast, LLM-free endpoints that back the IDE-like Agentic Terminal page. They
+# reuse the computer agent's hardened, sandboxed tool helpers so file/shell
+# access stays inside the same safety envelope as /v1/computer/*.
+
+class TerminalExecRequest(BaseModel):
+    command: str
+    cwd: Optional[str] = None
+    timeout: int = 120
+
+    @field_validator('timeout')
+    @classmethod
+    def _cap_timeout(cls, v):  # noqa: unused
+        if v < 1 or v > 600:
+            raise ValueError('timeout must be between 1 and 600')
+        return v
+
+
+class TerminalPythonRequest(BaseModel):
+    code: str
+    timeout: int = 120
+
+    @field_validator('timeout')
+    @classmethod
+    def _cap_timeout_py(cls, v):  # noqa: unused
+        if v < 1 or v > 600:
+            raise ValueError('timeout must be between 1 and 600')
+        return v
+
+
+class TerminalFsReadRequest(BaseModel):
+    path: str
+    offset: int = 0
+    limit: int = 500
+
+    @field_validator('limit')
+    @classmethod
+    def _cap_limit(cls, v):  # noqa: unused
+        if v < 1 or v > 5000:
+            raise ValueError('limit must be between 1 and 5000')
+        return v
+
+
+class TerminalFsWriteRequest(BaseModel):
+    path: str
+    content: str
+    append: bool = False
+
+
+class TerminalFsListRequest(BaseModel):
+    path: str = "."
+    show_hidden: bool = False
+
+
+class TerminalFsDeleteRequest(BaseModel):
+    path: str
+
+
+class TerminalFsMkdirRequest(BaseModel):
+    path: str
+
+
+def _terminal_sandbox(req) -> bool:
+    """Mirror the computer agent's sandbox decision for the terminal surface."""
+    if CONFIG.computer.get("allow_unsafe"):
+        return bool(CONFIG.sandbox or getattr(req, "sandbox", False))
+    return True
+
+
+@app.post("/v1/terminal/exec")
+def terminal_exec(req: TerminalExecRequest):
+    from computer_agent import _is_dangerous, _sandbox_scoped
+    if _is_dangerous(req.command):
+        raise HTTPException(400, "Command blocked by dangerous-pattern guard")
+    sandbox = _terminal_sandbox(req)
+    cwd = req.cwd or os.getcwd()
+    if sandbox:
+        allowed, ap = _sandbox_scoped(cwd)
+        if not allowed:
+            raise HTTPException(400, "Sandbox: working directory outside project blocked")
+        cwd = ap
+    try:
+        import subprocess
+        proc = subprocess.run(
+            req.command, shell=True, capture_output=True, text=True,  # nosec B602
+            timeout=req.timeout, cwd=cwd,
+        )
+        out = proc.stdout or ""
+        if proc.returncode != 0 and proc.stderr:
+            out += ("\n" if out else "") + proc.stderr
+        return {
+            "stdout": out or f"[exit code {proc.returncode}]",
+            "stderr": "",
+            "exit_code": proc.returncode,
+            "sandbox": sandbox,
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(408, f"Command timed out after {req.timeout}s")
+    except Exception as e:
+        raise HTTPException(500, f"Shell error: {e}")
+
+
+@app.post("/v1/terminal/python")
+def terminal_python(req: TerminalPythonRequest):
+    from computer_agent import _tool_python_exec
+    if not req.code.strip():
+        raise HTTPException(400, "No code provided")
+    try:
+        result = _tool_python_exec(req.code)
+        return {
+            "stdout": result.output,
+            "stderr": "",
+            "exit_code": 0 if result.success else 1,
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Python exec error: {e}")
+
+
+@app.post("/v1/terminal/fs/read")
+def terminal_fs_read(req: TerminalFsReadRequest):
+    from computer_agent import _tool_read_file
+    sandbox = _terminal_sandbox(req)
+    try:
+        result = _tool_read_file(req.path, req.offset, req.limit, sandbox=sandbox)
+        return {"content": result.output, "success": result.success, "sandbox": sandbox}
+    except Exception as e:
+        raise HTTPException(500, f"Read error: {e}")
+
+
+@app.post("/v1/terminal/fs/write")
+def terminal_fs_write(req: TerminalFsWriteRequest):
+    from computer_agent import _tool_write_file
+    try:
+        result = _tool_write_file(req.path, req.content, req.append)
+        return {"ok": result.success, "message": result.output, "path": req.path}
+    except Exception as e:
+        raise HTTPException(500, f"Write error: {e}")
+
+
+@app.post("/v1/terminal/fs/list")
+def terminal_fs_list(req: TerminalFsListRequest):
+    from computer_agent import _tool_list_dir
+    sandbox = _terminal_sandbox(req)
+    try:
+        result = _tool_list_dir(req.path, req.show_hidden, sandbox=sandbox)
+        return {"path": req.path, "listing": result.output, "success": result.success, "sandbox": sandbox}
+    except Exception as e:
+        raise HTTPException(500, f"List error: {e}")
+
+
+@app.post("/v1/terminal/fs/delete")
+def terminal_fs_delete(req: TerminalFsDeleteRequest):
+    from computer_agent import _sandbox_scoped
+    sandbox = _terminal_sandbox(req)
+    if sandbox:
+        allowed, ap = _sandbox_scoped(req.path)
+        if not allowed:
+            raise HTTPException(400, "Sandbox: delete outside project directory blocked")
+        req.path = ap
+    try:
+        import shutil
+        if os.path.isdir(req.path):
+            shutil.rmtree(req.path)
+            return {"ok": True, "message": f"Removed directory: {req.path}"}
+        if os.path.isfile(req.path):
+            os.remove(req.path)
+            return {"ok": True, "message": f"Removed file: {req.path}"}
+        raise HTTPException(404, f"Path not found: {req.path}")
+    except Exception as e:
+        raise HTTPException(500, f"Delete error: {e}")
+
+
+@app.post("/v1/terminal/fs/mkdir")
+def terminal_fs_mkdir(req: TerminalFsMkdirRequest):
+    from computer_agent import _sandbox_scoped
+    sandbox = _terminal_sandbox(req)
+    if sandbox:
+        allowed, ap = _sandbox_scoped(req.path)
+        if not allowed:
+            raise HTTPException(400, "Sandbox: mkdir outside project directory blocked")
+        req.path = ap
+    try:
+        os.makedirs(req.path, exist_ok=True)
+        return {"ok": True, "message": f"Created: {req.path}"}
+    except Exception as e:
+        raise HTTPException(500, f"Mkdir error: {e}")
+
+
+_EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", "venv", "env",
+                 "frontend", "sessions", "generated", "lora_datasets", ".next"}
+
+
+@app.get("/v1/terminal/fs/tree")
+def terminal_fs_tree(path: str = ".", depth: int = 3, max_nodes: int = 400):
+    from computer_agent import _sandbox_scoped
+    sandbox = True
+    root = os.getcwd() if not path or path == "." else os.path.abspath(os.path.expanduser(path))
+    if sandbox:
+        allowed, ap = _sandbox_scoped(root)
+        if not allowed:
+            raise HTTPException(400, "Sandbox: tree root outside project directory blocked")
+        root = ap
+    if depth < 1 or depth > 6:
+        depth = 3
+    if max_nodes < 1 or max_nodes > 2000:
+        max_nodes = 400
+    nodes: list = []
+    try:
+        def walk(cur: str, rel: str, level: int):
+            if level > depth or len(nodes) >= max_nodes:
+                return
+            try:
+                entries = sorted(os.listdir(cur), key=lambda e: (not os.path.isdir(os.path.join(cur, e)), e.lower()))
+            except PermissionError:
+                return
+            for e in entries:
+                if e.startswith(".") and e not in (".env",):
+                    continue
+                full = os.path.join(cur, e)
+                is_dir = os.path.isdir(full)
+                if is_dir and e in _EXCLUDE_DIRS:
+                    continue
+                rel_path = os.path.join(rel, e) if rel else e
+                nodes.append({
+                    "name": e,
+                    "path": rel_path,
+                    "type": "dir" if is_dir else "file",
+                    "size": os.path.getsize(full) if not is_dir else 0,
+                })
+                if is_dir and level < depth and len(nodes) < max_nodes:
+                    walk(full, rel_path, level + 1)
+        walk(root, "" if path in (".", "") else path, 1)
+        return {"root": root, "nodes": nodes[:max_nodes], "count": len(nodes[:max_nodes]), "sandbox": sandbox}
+    except Exception as e:
+        raise HTTPException(500, f"Tree error: {e}")
+
+
 # ---------- Conversation API ----------
 
 def _conv_title(conv_id: str, conv) -> str:
@@ -2545,7 +2782,8 @@ def get_agent(name: str):
     if a is None:
         raise HTTPException(404, f"Unknown agent '{name}'. Available: {agents.list_agents()}")
     return {"name": a["name"], "role": a["role"], "description": a["description"],
-            "system_prompt": a["system_prompt"]}
+            "system_prompt": a["system_prompt"], "model": a.get("model"),
+            "keywords": a.get("keywords", [])}
 
 @app.post("/v1/agents/{name}/run")
 def run_agent(name: str, req: AgentRunRequest):
@@ -2561,7 +2799,7 @@ def run_agent(name: str, req: AgentRunRequest):
             conv_id=f"agent-{name}-{uuid.uuid4().hex[:8]}",
             use_planning=req.use_planning,
             system_override=a["system_prompt"],
-            model_override=req.model or None,
+            model_override=req.model or a.get("model") or None,
             temperature=req.temperature,
             max_tokens=req.max_tokens,
         )

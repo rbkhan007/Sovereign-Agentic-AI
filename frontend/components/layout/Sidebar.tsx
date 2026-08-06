@@ -3,28 +3,36 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Activity, MessageSquare, FolderOpen, Database, Cpu, Wrench, Shield, Settings, HelpCircle, Sun, Moon, ChevronLeft, ChevronRight, Wifi, WifiOff, X, GitBranch, Menu, Bot, type LucideIcon } from 'lucide-react';
+import { MessageSquare, Database, Cpu, Wrench, Shield, Settings, HelpCircle, Sun, Moon, ChevronLeft, ChevronRight, Wifi, WifiOff, X, Menu, Bot, LayoutDashboard, type LucideIcon } from 'lucide-react';
+import { PulseLineIcon, GraphWebIcon, WorkspacePaneIcon, TerminalCodeIcon } from '@/components/icons';
 import { useTheme } from '@/components/ThemeProvider';
 import { useSidebar } from '@/components/SidebarProvider';
 import { fetchJSON, toArray } from '@/lib/api';
 
-type NavItem = { href: string; label: string; icon: LucideIcon };
+type NavItem = { href: string; label: string; icon: LucideIcon | ((p: { size?: number; className?: string }) => React.ReactNode) };
 type AgentItem = { name: string; role?: string };
 
 const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: 'Overview',
     items: [
-      { href: '/', label: 'Dashboard', icon: Activity },
+      { href: '/', label: 'Home', icon: PulseLineIcon },
+      { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { href: '/chat', label: 'Chat', icon: MessageSquare },
     ],
   },
   {
     label: 'Data',
     items: [
-      { href: '/workspace', label: 'Workspace', icon: FolderOpen },
+      { href: '/workspace', label: 'Workspace', icon: WorkspacePaneIcon },
       { href: '/database', label: 'Database', icon: Database },
-      { href: '/graph', label: 'Knowledge Graph', icon: GitBranch },
+      { href: '/graph', label: 'Knowledge Graph', icon: GraphWebIcon },
+    ],
+  },
+  {
+    label: 'Build',
+    items: [
+      { href: '/terminal', label: 'Agentic Terminal', icon: TerminalCodeIcon },
     ],
   },
   {
@@ -92,14 +100,20 @@ export default function Sidebar() {
         <div className="flex items-center gap-2.5">
           {!collapsed ? (
             <>
-              <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-accent to-accent-2 flex items-center justify-center text-white text-sm font-bold shadow-lg shadow-accent/30 shrink-0">A</span>
+              <span className="sidebar-brand-icon">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/static/ascii-logo.png" alt="" className="sidebar-brand-img" />
+              </span>
               <div className="min-w-0">
-                <h1 className="text-sm font-bold tracking-tight gradient-text truncate">Agentic LLM</h1>
-                <p className="text-[10px] text-text-muted">Local · Fast · Private</p>
+                <h1 className="text-sm font-bold tracking-tight gradient-text truncate">Sovereign AI</h1>
+                <p className="text-[10px] text-text-muted truncate">Agentic · Local · Private</p>
               </div>
             </>
           ) : (
-            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-accent to-accent-2 flex items-center justify-center text-white text-sm font-bold shadow-lg shadow-accent/30 mx-auto">A</span>
+            <span className="sidebar-brand-icon mx-auto">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/static/ascii-logo.png" alt="" className="sidebar-brand-img" />
+            </span>
           )}
         </div>
       </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { fetchJSON, toArray, type GraphNode, type GraphStats } from '@/lib/api';
 import { useToast } from '@/components/providers/ToastProvider';
 import Card from '@/components/ui/Card';
@@ -12,9 +12,15 @@ import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import { t } from '@/lib/i18n';
-import { GitBranch, Search, Tag, FileText, RefreshCw, Sparkles, Loader2, Boxes, X } from 'lucide-react';
+import { GitBranch, Search, Tag, FileText, RefreshCw, Sparkles, Loader2, Boxes, X, Trash2, Link2 } from 'lucide-react';
 
 type Tab = 'nodes' | 'tags' | 'recent' | 'semantic';
+
+interface NodeLinks {
+  linked?: GraphNode[];
+  backlinked?: GraphNode[];
+  degrees?: { in_degree?: number; out_degree?: number };
+}
 
 export default function GraphPage() {
   const [stats, setStats] = useState<GraphStats | null>(null);
@@ -22,34 +28,46 @@ export default function GraphPage() {
   const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
   const [recent, setRecent] = useState<GraphNode[]>([]);
   const [query, setQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState<string>('');
   const [semanticResults, setSemanticResults] = useState<{ node: GraphNode; score: number; neighbours?: GraphNode[] }[]>([]);
   const [semanticLoading, setSemanticLoading] = useState(false);
   const [previewNode, setPreviewNode] = useState<GraphNode | null>(null);
+  const [nodeLinks, setNodeLinks] = useState<NodeLinks | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [tab, setTab] = useState<Tab>('nodes');
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const { addToast } = useToast();
+  const previewIdRef = useRef<string | null>(null);
 
-  async function openNodePreview(node: GraphNode) {
+  const openNodePreview = useCallback(async (node: GraphNode) => {
     setPreviewLoading(true);
     setPreviewNode(node);
+    setNodeLinks(null);
+    previewIdRef.current = String(node.id);
+    const requestedId = String(node.id);
     try {
-      const data = await fetchJSON(`/v1/graph/nodes/${String(node.id)}`);
-      setPreviewNode((data as { node?: GraphNode }).node || node);
+      const [nodeData, links] = await Promise.all([
+        fetchJSON<{ node?: GraphNode }>(`/v1/graph/nodes/${requestedId}`),
+        fetchJSON(`/v1/graph/links/${requestedId}`).catch(() => null),
+      ]);
+      if (previewIdRef.current !== requestedId) return;
+      setPreviewNode(nodeData.node || node);
+      setNodeLinks(links as NodeLinks | null);
     } catch {
       addToast('Failed to load node details', 'error');
-      setPreviewNode(node);
+      if (previewIdRef.current === requestedId) setPreviewNode(node);
     } finally {
-      setPreviewLoading(false);
+      if (previewIdRef.current === requestedId) setPreviewLoading(false);
     }
-  }
+  }, [addToast]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [s, n, tg, r] = await Promise.all([
         fetchJSON('/v1/graph/stats'),
-        fetchJSON('/v1/graph/nodes?limit=100'),
+        fetchJSON('/v1/graph/nodes?limit=200'),
         fetchJSON('/v1/graph/tags'),
         fetchJSON('/v1/graph/recent?limit=20'),
       ]);
@@ -62,21 +80,51 @@ export default function GraphPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [addToast]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function syncWorkspace() {
+    setSyncing(true);
+    try {
+      const data = await fetchJSON('/v1/graph/sync?workspace_id=default', { method: 'POST' });
+      addToast('Workspace synced into knowledge graph', 'success');
+      void load();
+      const count = (data as Record<string, unknown>).nodes;
+      if (typeof count === 'number') addToast(`${count} nodes in graph`, 'success');
+    } catch {
+      addToast('Sync failed (DB may be off)', 'error');
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function deleteNode(nodeId: string | number) {
+    try {
+      await fetchJSON(`/v1/graph/nodes/${String(nodeId)}`, { method: 'DELETE' });
+      setPreviewNode(null);
+      setNodeLinks(null);
+      addToast('Node deleted', 'success');
+      void load();
+    } catch {
+      addToast('Delete failed', 'error');
+    }
+  }
 
   const filteredNodes = useMemo(() => {
-    if (!query.trim()) return nodes;
-    const q = query.toLowerCase();
-    return nodes.filter(n => n.title.toLowerCase().includes(q) || (n.node_type || '').toLowerCase().includes(q));
-  }, [nodes, query]);
+    const q = query.trim().toLowerCase();
+    return nodes.filter(n => {
+      if (typeFilter && n.node_type !== typeFilter) return false;
+      if (!q) return true;
+      return n.title.toLowerCase().includes(q) || (n.node_type || '').toLowerCase().includes(q);
+    });
+  }, [nodes, query, typeFilter]);
 
   async function runSemanticSearch() {
     if (!query.trim()) return;
     setSemanticLoading(true);
     try {
-      const data = await fetchJSON(`/v1/graph/hybrid?q=${encodeURIComponent(query)}`);
+      const data = await fetchJSON(`/v1/graph/hybrid?q=${encodeURIComponent(query)}&limit=8&expand=4`);
       setSemanticResults(toArray(data));
     } catch {
       addToast('Semantic search failed', 'error');
@@ -87,6 +135,10 @@ export default function GraphPage() {
 
   const nodeCount = (stats as Record<string, unknown> | null)?.nodes as number | undefined;
   const edgeCount = (stats as Record<string, unknown> | null)?.edges as number | undefined;
+  const nodeTypes = useMemo(() => {
+    const types = (stats as Record<string, unknown> | null)?.node_types as Record<string, number> | undefined;
+    return types ? Object.entries(types).sort((a, b) => b[1] - a[1]) : [];
+  }, [stats]);
 
   if (loading) {
     return (
@@ -114,6 +166,10 @@ export default function GraphPage() {
         subtitle={t('graph.subtitle') || 'Explore concepts, documents, and connections'}
         icon={<Boxes size={20} />}
       >
+        <Button onClick={syncWorkspace} disabled={syncing} variant="secondary" className="gap-2">
+          {syncing ? <Loader2 size={16} className="animate-spin" /> : <GitBranch size={16} />}
+          {syncing ? 'Syncing...' : 'Sync Workspace'}
+        </Button>
         <Button onClick={load} variant="secondary" className="gap-2">
           <RefreshCw size={16} />
           {t('models.refresh')}
@@ -143,7 +199,7 @@ export default function GraphPage() {
         {tab === 'nodes' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
             <Card>
-              <div className="flex items-center gap-2 mb-4">
+              <div className="flex items-center gap-2 mb-3">
                 <Search size={16} className="text-text-muted shrink-0" />
                 <Input
                   value={query}
@@ -152,8 +208,18 @@ export default function GraphPage() {
                   className="flex-1"
                 />
               </div>
+              {nodeTypes.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  <button onClick={() => setTypeFilter('')} className={`chip ${typeFilter === '' ? 'chip-active' : ''}`}>All</button>
+                  {nodeTypes.map(([type, count]) => (
+                    <button key={type} onClick={() => setTypeFilter(type)} className={`chip ${typeFilter === type ? 'chip-active' : ''}`}>
+                      {type} ({count})
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="space-y-2">
-                {filteredNodes.length === 0 && <EmptyState icon={<FileText size={22} />} title="No nodes found" description="Try a different search or load a workspace." />}
+                {filteredNodes.length === 0 && <EmptyState icon={<FileText size={22} />} title="No nodes found" description="Sync a workspace or upload files to build the graph." />}
                 {filteredNodes.map(n => (
                   <div key={n.id} className="flex items-center justify-between p-3 rounded-xl bg-bg-primary/40 border border-border hover:border-accent/50 hover:shadow-glow transition-all cursor-pointer" onClick={() => openNodePreview(n)}>
                     <div className="flex items-center gap-3 min-w-0">
@@ -161,7 +227,15 @@ export default function GraphPage() {
                       <span className="text-sm font-medium truncate">{n.title}</span>
                       {n.node_type && <Badge variant="brand">{n.node_type}</Badge>}
                     </div>
-                    <span className="text-xs text-text-muted font-mono shrink-0">{n.id}</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {typeof n.out_degree === 'number' && n.out_degree > 0 && (
+                        <span className="text-[10px] text-text-muted font-mono">→{n.out_degree}</span>
+                      )}
+                      {typeof n.in_degree === 'number' && n.in_degree > 0 && (
+                        <span className="text-[10px] text-text-muted font-mono">←{n.in_degree}</span>
+                      )}
+                      <span className="text-xs text-text-muted font-mono">{n.id}</span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -175,9 +249,14 @@ export default function GraphPage() {
                     <span className="truncate">{previewNode.title}</span>
                     {previewNode.node_type && <Badge variant="brand">{previewNode.node_type}</Badge>}
                   </h3>
-                  <button onClick={() => setPreviewNode(null)} className="text-text-muted hover:text-text-primary transition-colors p-1 rounded-md hover:bg-bg-tertiary" title="Close">
-                    <X size={16} />
-                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => deleteNode(previewNode.id)} className="text-text-muted hover:text-danger transition-colors p-1 rounded-md hover:bg-bg-tertiary" title="Delete node">
+                      <Trash2 size={15} />
+                    </button>
+                    <button onClick={() => { setPreviewNode(null); setNodeLinks(null); }} className="text-text-muted hover:text-text-primary transition-colors p-1 rounded-md hover:bg-bg-tertiary" title="Close">
+                      <X size={16} />
+                    </button>
+                  </div>
                 </div>
                 {previewLoading ? (
                   <div className="space-y-2">
@@ -186,9 +265,42 @@ export default function GraphPage() {
                     <Skeleton className="h-4 w-1/2" />
                   </div>
                 ) : (
-                  <p className="text-sm text-text-secondary whitespace-pre-wrap max-h-64 overflow-y-auto scrollbar-thin">{String(previewNode.content || 'No content')}</p>
+                  <>
+                    <p className="text-sm text-text-secondary whitespace-pre-wrap max-h-48 overflow-y-auto scrollbar-thin">{String(previewNode.content || 'No content')}</p>
+                    <div className="flex flex-wrap gap-1.5 mt-3">
+                      {nodeLinks?.degrees && (
+                        <Badge variant="default">in {nodeLinks.degrees.in_degree ?? 0} · out {nodeLinks.degrees.out_degree ?? 0}</Badge>
+                      )}
+                      {!!previewNode.workspace_id && <Badge variant="default">ws: {String(previewNode.workspace_id)}</Badge>}
+                      {!!previewNode.created_at && <Badge variant="default">{String(previewNode.created_at).slice(0, 10)}</Badge>}
+                    </div>
+                    {(nodeLinks?.linked?.length || nodeLinks?.backlinked?.length) ? (
+                      <div className="mt-3 space-y-3 border-t border-border pt-3">
+                        {nodeLinks.linked && nodeLinks.linked.length > 0 && (
+                          <div>
+                            <p className="text-[10px] uppercase tracking-widest text-text-muted mb-1.5 flex items-center gap-1.5"><Link2 size={11} /> Links to</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {nodeLinks.linked.slice(0, 10).map(l => (
+                                <button key={String(l.id)} onClick={() => openNodePreview(l)} className="text-[11px] px-2 py-1 rounded-full bg-bg-tertiary border border-border text-text-secondary hover:border-accent/50 hover:text-accent transition-colors">{l.title}</button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {nodeLinks.backlinked && nodeLinks.backlinked.length > 0 && (
+                          <div>
+                            <p className="text-[10px] uppercase tracking-widest text-text-muted mb-1.5 flex items-center gap-1.5"><Link2 size={11} /> Linked from</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {nodeLinks.backlinked.slice(0, 10).map(l => (
+                                <button key={String(l.id)} onClick={() => openNodePreview(l)} className="text-[11px] px-2 py-1 rounded-full bg-bg-tertiary border border-border text-text-secondary hover:border-accent/50 hover:text-accent transition-colors">{l.title}</button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                    <div className="mt-3 text-[10px] text-text-muted font-mono border-t border-border pt-3">id: {previewNode.id}</div>
+                  </>
                 )}
-                <div className="mt-3 text-[10px] text-text-muted font-mono border-t border-border pt-3">id: {previewNode.id}</div>
               </Card>
             )}
           </div>

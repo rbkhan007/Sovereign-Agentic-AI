@@ -1,336 +1,380 @@
 'use client';
 
-import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { fetchJSON, toArray, toText, type ModelItem, type SystemInfo, type Metrics, type HardwareInfo } from '@/lib/api';
-import { useToast } from '@/components/providers/ToastProvider';
-import { useChartTheme, chartTooltipStyle } from '@/lib/chartTheme';
-import StatCard from '@/components/ui/StatCard';
-import Card from '@/components/ui/Card';
-import Skeleton, { CardSkeleton } from '@/components/ui/Skeleton';
-import Button from '@/components/ui/Button';
-import PageHeader from '@/components/ui/PageHeader';
-import { t } from '@/lib/i18n';
-import { Activity, Cpu, HardDrive, Zap, ArrowRight, RefreshCw, Loader2, LayoutDashboard } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { fetchJSON, toArray } from '@/lib/api';
+import { ArrowRight, Sparkles, Bot, LayoutDashboard, Loader2 } from 'lucide-react';
+import {
+  OrchestratorIcon, TerminalCodeIcon, AgentXIcon, LocalEngineIcon, GraphWebIcon,
+  WorkspacePaneIcon, VisionLensIcon, ArtForgeIcon, ReactLoopIcon, MemoryMatrixIcon,
+  SandboxShieldIcon, DataLakeIcon, CloudBridgeIcon, HubDownloadIcon, PulseLineIcon,
+} from '@/components/icons';
 import Link from 'next/link';
-import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import AsciiLogo from '@/components/AsciiLogo';
+import Card from '@/components/ui/Card';
 
-const MAX_HISTORY = 30;
+const SOFTWARE: { icon: React.ReactNode; title: string; desc: string }[] = [
+  { icon: <OrchestratorIcon size={18} />, title: 'Multi-Agent Orchestrator', desc: 'A planner + executor pipeline routes each task to the best-fit model with adaptive harness scoring and auto-summarizing context.' },
+  { icon: <TerminalCodeIcon size={18} />, title: 'Agentic Terminal', desc: 'An IDE-like workspace: edit, run and let the agent build files and execute shell/Python safely inside a sandbox.' },
+  { icon: <AgentXIcon size={18} />, title: 'Agent X (All-in-One)', desc: 'A universal, autonomous agent that follows your goal and the project index to deliver complete, production-ready results.' },
+  { icon: <LocalEngineIcon size={18} />, title: 'Local LLM Engine', desc: 'Runs GGUF models on your GPU via Vulkan with VRAM budgeting, LRU eviction and per-model worker threads.' },
+  { icon: <GraphWebIcon size={18} />, title: 'Knowledge Graph', desc: 'Obsidian-style wiki-links, tags and backlinks with pgvector hybrid + recursive shortest-path search.' },
+  { icon: <WorkspacePaneIcon size={18} />, title: 'Workspaces', desc: 'Isolated chat areas with their own system prompt, file chunks and scoped memory — great for managing projects.' },
+  { icon: <VisionLensIcon size={18} />, title: 'Computer Vision', desc: 'Local image understanding with Gemma 3 to describe screenshots and uploads for the agent.' },
+  { icon: <ArtForgeIcon size={18} />, title: 'Image Generation', desc: 'On-device Stable Diffusion image synthesis, RAM-guarded and resolution-capped.' },
+  { icon: <ReactLoopIcon size={18} />, title: 'Computer Agent', desc: 'ReAct shell, file I/O, web and process tools — sandboxed by default, with a dangerous-command guard.' },
+  { icon: <MemoryMatrixIcon size={18} />, title: 'Memory & Vector Store', desc: 'PostgreSQL + pgvector persistence with auto-pruning, sessions and per-workspace memory scopes.' },
+  { icon: <SandboxShieldIcon size={18} />, title: 'Security & Sandbox', desc: 'Dangerous-pattern blocking, path-traversal-safe file ops, API tokens and rate limiting on every endpoint.' },
+  { icon: <CloudBridgeIcon size={18} />, title: 'Cloud Fallback', desc: 'Optional OpenAI-compatible fallback with sliding-window rate limiting when local models are unavailable.' },
+];
 
-export default function Dashboard() {
-  const [models, setModels] = useState<ModelItem[]>([]);
-  const [system, setSystem] = useState<SystemInfo | null>(null);
-  const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [hardware, setHardware] = useState<HardwareInfo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [polling, setPolling] = useState(true);
-  const pollingRef = useRef(false);
-  const [loadingModel, setLoadingModel] = useState(false);
-  const [backendOnline, setBackendOnline] = useState(false);
-  const { addToast } = useToast();
-  const chartTheme = useChartTheme();
+const ARCH_STAGES: { icon: React.ReactNode; title: string; desc: string }[] = [
+  { icon: <PulseLineIcon size={18} />, title: 'Your Prompt', desc: 'Any task, in plain language.' },
+  { icon: <GraphWebIcon size={18} />, title: 'Selection Room', desc: 'classify_task buckets code / math / summarize / translate / tool / creative / general.' },
+  { icon: <OrchestratorIcon size={18} />, title: 'Model Router', desc: 'Harness ranks executors by fitness = success·60 + speed·30 + recency·10.' },
+  { icon: <ReactLoopIcon size={18} />, title: 'Planner (Hy-MT2)', desc: 'Generates 2 candidate plans, ranked by length for the shortest reliable path.' },
+  { icon: <LocalEngineIcon size={18} />, title: 'Executors', desc: 'Gemma, Qwen2.5-Omni & Mythos-nano answer in parallel; the best wins.' },
+  { icon: <MemoryMatrixIcon size={18} />, title: 'Judge + Harness', desc: 'Every answer scored 0–10; scores feed back into the router.' },
+];
 
-  const [history, setHistory] = useState<{ time: string; ram_used_mb: number; vram_used_mb: number; cpu: number; requests: number; tokens_per_sec: number }[]>([]);
+const CONTEXT_LAYER = [
+  { icon: <MemoryMatrixIcon size={14} />, label: 'Memory & pgvector' },
+  { icon: <GraphWebIcon size={14} />, label: 'Knowledge Graph' },
+  { icon: <WorkspacePaneIcon size={14} />, label: 'Workspace context' },
+  { icon: <VisionLensIcon size={14} />, label: 'Vision' },
+  { icon: <CloudBridgeIcon size={14} />, label: 'Web search fallback' },
+];
 
-  const loadInitial = async () => {
-    try {
-      const [m, s, met, h, health] = await Promise.all([
-        fetchJSON('/v1/models'),
-        fetchJSON('/v1/system'),
-        fetchJSON('/v1/metrics'),
-        fetchJSON('/v1/hardware'),
-        fetchJSON('/v1/health').catch(() => ({ status: 'offline' })),
-      ]);
-      setModels(toArray<ModelItem>(m));
-      setSystem(s as SystemInfo);
-      setMetrics(met as Metrics);
-      setHardware(h as HardwareInfo);
-      setBackendOnline((health as Record<string, unknown>).status === 'ok' || (health as Record<string, unknown>).status === 'healthy');
-    } catch {
-      addToast('Failed to load dashboard data', 'error');
-      setBackendOnline(false);
-    } finally {
-      setLoading(false);
-    }
-  };
+const MODELS = [
+  { name: 'Hy-MT2 1.8B', quant: 'Q4_K_M', role: 'Planner', vram: '~1.1 GB', tags: ['multi-candidate planning', 'low VRAM'], hf: 'gguf-plan-1.8b' },
+  { name: 'Gemma 4 E4B', quant: 'Q2_K_XL', role: 'Executor · Vision', vram: '~3 GB', tags: ['vision', 'instruction'], hf: 'gemma-4-e4b' },
+  { name: 'Qwen2.5-Omni 3B', quant: 'Q4_K_M', role: 'Multimodal Executor', vram: '~2.5 GB', tags: ['multimodal', 'fast'], hf: 'qwen2.5-omni-3b' },
+  { name: 'Mythos-nano', quant: 'Q5_K_M', role: 'Agent X core', vram: '~2.7 GB', tags: ['all-in-one', 'quality'], hf: 'mythos-nano' },
+];
+
+const DATASETS = [
+  { icon: <DataLakeIcon size={18} />, title: 'ARC Grid Reasoning', desc: 'arc/training.json powers the /arc eval — measure grid-pattern accuracy per model.', meta: 'eval' },
+  { icon: <DataLakeIcon size={18} />, title: 'LoRA Fine-tuning', desc: 'Drop prompt/output pairs in lora_datasets/ and train a lightweight adapter on CPU (peft).', meta: 'train' },
+  { icon: <WorkspacePaneIcon size={18} />, title: 'Workspace Knowledge', desc: 'Upload docs to a workspace — chunked (600/120) and embedded for scoped retrieval.', meta: 'rag' },
+  { icon: <VisionLensIcon size={18} />, title: 'Chat Uploads', desc: 'PDFs get preview text, images get a vision description inlined as context.', meta: 'files' },
+  { icon: <GraphWebIcon size={18} />, title: 'Wiki Knowledge Base', desc: '[[wiki-links]], #tags and headings on markdown become graph nodes + backlinks.', meta: 'graph' },
+  { icon: <MemoryMatrixIcon size={18} />, title: 'Sessions & Metrics', desc: 'Conversation history, persisted sessions and metrics snapshots for trend analysis.', meta: 'logs' },
+];
+
+type Pulse = { requests: number; models: number; vram: number; cpu: number; online: boolean };
+
+function SystemPulse() {
+  const [pulse, setPulse] = useState<Pulse>({ requests: 0, models: 0, vram: 0, cpu: 0, online: false });
 
   useEffect(() => {
-    loadInitial();
+    let mounted = true;
+    async function tick() {
+      try {
+        const metrics = (await fetchJSON('/v1/metrics', { timeout: 4000 })) as { total_requests?: number; requests?: number } | null;
+        const hardware = (await fetchJSON('/v1/hardware', { timeout: 4000 })) as { gpu_vram_used_mb?: number; cpu_percent?: number } | null;
+        const models = (await fetchJSON('/v1/models', { timeout: 4000 })) as { data?: unknown[] } | unknown[] | null;
+        const modelsData = Array.isArray(models) ? models : models?.data ?? [];
+        const list = (modelsData as { id?: string; loaded?: boolean }[]).filter(m => m && m.loaded);
+        if (!mounted) return;
+        setPulse({
+          requests: metrics?.total_requests ?? metrics?.requests ?? 0,
+          models: list.length,
+          vram: hardware?.gpu_vram_used_mb ?? 0,
+          cpu: hardware?.cpu_percent ?? 0,
+          online: true,
+        });
+      } catch {
+        if (mounted) setPulse(p => ({ ...p, online: false }));
+      }
+    }
+    tick();
+    const interval = setInterval(tick, 15000);
+    return () => { mounted = false; clearInterval(interval); };
   }, []);
 
-  useEffect(() => {
-    if (!polling) return;
-    const id = setInterval(async () => {
-      if (pollingRef.current) return;
-      pollingRef.current = true;
-      try {
-        const [met, h] = await Promise.all([
-          fetchJSON('/v1/metrics'),
-          fetchJSON('/v1/hardware'),
-        ]);
-        setMetrics(met as Metrics);
-        setHardware(h as HardwareInfo);
-
-        const now = new Date();
-        const time = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-        const m = (met as Record<string, unknown>) || {};
-        const hw = (h as HardwareInfo) || ({} as HardwareInfo);
-        const ramUsed = Math.max(0, (hw.ram_total_mb || 0) - (hw.ram_available_mb || 0));
-
-        setHistory(prev => {
-          const next = [...prev, {
-            time,
-            ram_used_mb: ramUsed,
-            vram_used_mb: hw.gpu_vram_used_mb || 0,
-            cpu: hw.cpu_utilization || 0,
-            requests: typeof m.requests === 'number' ? m.requests : (prev[prev.length - 1]?.requests || 0),
-            tokens_per_sec: typeof m.tokens_per_sec_window === 'number' ? m.tokens_per_sec_window : (typeof m.tokens_per_sec === 'number' ? m.tokens_per_sec : (prev[prev.length - 1]?.tokens_per_sec || 0)),
-          }];
-          return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
-        });
-      } catch { /* ignore poll errors */ } finally {
-        pollingRef.current = false;
-      }
-    }, 2000);
-    return () => clearInterval(id);
-  }, [polling]);
-
-  const loadedCount = useMemo(() => models.filter(m => m.loaded).length, [models]);
-  const totalRequests = useMemo(() => {
-    if (!metrics) return '—';
-    const req = (metrics as Record<string, unknown>).requests;
-    if (typeof req === 'number') return req.toLocaleString();
-    return '—';
-  }, [metrics]);
-
-  async function loadDefaultModel() {
-    const executor = models.find(m => (m.role || '').toLowerCase().includes('executor')) || models[0];
-    if (!executor) return;
-    setLoadingModel(true);
-    try {
-      await fetchJSON(`/v1/models/load?name=${encodeURIComponent(executor.id)}`, { method: 'POST' });
-      addToast(`Loading ${executor.id}...`, 'success');
-      setTimeout(loadInitial, 2000);
-    } catch (e) {
-      addToast(toText(e), 'error');
-    } finally {
-      setLoadingModel(false);
-    }
-  }
-
-  if (loading) {
-    return (
-      <div className="page-shell space-y-6">
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-9 w-48" />
-          <Skeleton className="h-10 w-36" />
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} />)}
-        </div>
-      </div>
-    );
-  }
-
-  const cpuLabel = (hardware as Record<string, unknown> | null)?.cpu_name as string || '—';
-  const ramUsed = hardware ? Math.max(0, (hardware.ram_total_mb || 0) - (hardware.ram_available_mb || 0)) : 0;
-  const ramPct = hardware ? Math.round((ramUsed / (hardware.ram_total_mb || 1)) * 100) : 0;
-  const vramPct = hardware ? Math.round(((hardware.gpu_vram_used_mb || 0) / (hardware.gpu_vram_mb || 1)) * 100) : 0;
-
+  const items = [
+    { label: 'Total requests', value: pulse.online ? String(pulse.requests) : '—' },
+    { label: 'Models loaded', value: pulse.online ? String(pulse.models) : '—' },
+    { label: 'VRAM in use', value: pulse.online ? `${pulse.vram} MB` : '—' },
+    { label: 'CPU load', value: pulse.online ? `${Math.round(pulse.cpu)}%` : '—' },
+  ];
   return (
-    <div className="page-shell space-y-6">
-      <AsciiLogo />
-      <PageHeader
-        title={t('dashboard.title')}
-        subtitle={t('dashboard.subtitle')}
-        icon={<LayoutDashboard size={20} />}
-      >
-        <button
-          onClick={() => setPolling(p => !p)}
-          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-all bg-bg-tertiary hover:bg-bg-hover border border-border text-text-primary"
-          title={polling ? 'Pause live updates' : 'Resume live updates'}
-        >
-          <RefreshCw size={14} className={polling ? 'animate-spin' : ''} />
-          {polling ? t('dashboard.live') : t('dashboard.paused')}
-        </button>
-        {loadedCount === 0 && (
-          <Button onClick={loadDefaultModel} disabled={loadingModel} className="gap-2">
-            {loadingModel ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
-            Load Model
-          </Button>
-        )}
-        <QuickAction href="/chat" label={t('dashboard.startChatting')} />
-        <QuickAction href="/workspace" label={t('dashboard.workspace')} variant="secondary" />
-        <QuickAction href="/database" label={t('dashboard.database')} variant="secondary" />
-      </PageHeader>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={<Zap size={20} />} label={t('dashboard.totalRequests')} value={totalRequests} color="accent" />
-        <StatCard icon={<Cpu size={20} />} label={t('dashboard.modelsLoaded')} value={`${loadedCount} / ${models.length}`} color="success" subtitle="executors active" />
-        <StatCard icon={<HardDrive size={20} />} label={t('dashboard.vram')} value={typeof hardware?.gpu_vram_mb === 'number' ? `${hardware.gpu_vram_mb} MB` : '—'} color="warning" subtitle={vramPct > 0 ? `${vramPct}% used` : undefined} />
-        <StatCard icon={<Activity size={20} />} label={t('dashboard.backend')} value={backendOnline ? t('dashboard.online') : t('dashboard.offline')} color={backendOnline ? 'success' : 'danger'} subtitle={system?.version ? `v${system.version}` : undefined} />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <Card className="lg:col-span-2">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            {t('dashboard.modelsPreview')}
-            <span className="text-xs font-normal text-text-muted bg-bg-tertiary px-2 py-0.5 rounded-full">{models.length} total</span>
-          </h3>
-          <div className="space-y-2">
-            {models.length === 0 ? (
-              <p className="text-text-muted text-sm py-6 text-center">{t('dashboard.noModelsLoaded')}</p>
-            ) : (
-              models.slice(0, 6).map(m => (
-                <div key={m.id} className="flex items-center justify-between p-3 rounded-xl bg-bg-secondary/40 border border-border transition-all hover:border-accent/30 hover:bg-bg-secondary/60">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className={`relative flex w-2.5 h-2.5 shrink-0 ${m.loaded ? '' : ''}`}>
-                      <span className={`absolute inline-flex h-full w-full rounded-full ${m.loaded ? 'bg-success animate-ping opacity-40' : ''}`} />
-                      <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${m.loaded ? 'bg-success' : 'bg-text-muted'}`} />
-                    </span>
-                    <span className="font-medium text-sm truncate">{m.id}</span>
-                    {m.role && <span className="text-xs text-text-muted bg-bg-tertiary px-2 py-0.5 rounded-full capitalize">{m.role}</span>}
-                  </div>
-                  <span className={`text-xs font-medium shrink-0 ${m.loaded ? 'text-success' : 'text-text-muted'}`}>
-                    {m.loaded ? t('dashboard.loaded') : t('dashboard.unloaded')}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </Card>
-
-        <Card>
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Cpu size={16} className="text-accent" />
-            {t('dashboard.hardware')}
-          </h3>
-          <div className="space-y-3.5">
-            {hardware && typeof hardware === 'object' ? (
-              <>
-                <div className="flex justify-between text-sm gap-3">
-                  <span className="text-text-secondary shrink-0">{t('dashboard.cpu')}</span>
-                  <span className="font-medium text-right truncate">{cpuLabel || '—'}</span>
-                </div>
-                <div className="flex justify-between text-sm gap-3">
-                  <span className="text-text-secondary shrink-0">{t('dashboard.cores')}</span>
-                  <span className="font-medium">{hardware.cpu_cores || '—'}</span>
-                </div>
-                <div className="flex justify-between text-sm gap-3">
-                  <span className="text-text-secondary shrink-0">{t('dashboard.gpu')}</span>
-                  <span className="font-medium text-right truncate">{hardware.gpu_name || '—'}</span>
-                </div>
-                <div className="flex justify-between text-sm gap-3">
-                  <span className="text-text-secondary shrink-0">{t('dashboard.backendLabel')}</span>
-                  <span className="font-medium">{hardware.gpu_backend || '—'}</span>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm gap-3 mb-1.5">
-                    <span className="text-text-secondary shrink-0">{t('dashboard.ram')}</span>
-                    <span className="font-medium">{ramUsed} / {hardware.ram_total_mb || 0} MB ({ramPct}%)</span>
-                  </div>
-                  <div className="w-full bg-bg-tertiary rounded-full h-1.5 overflow-hidden">
-                    <div className={`h-1.5 rounded-full transition-all duration-500 ${ramPct > 85 ? 'bg-danger' : ramPct > 60 ? 'bg-warning' : 'bg-accent'}`} style={{ width: `${Math.min(100, ramPct)}%` }} />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm gap-3 mb-1.5">
-                    <span className="text-text-secondary shrink-0">{t('dashboard.vram')}</span>
-                    <span className="font-medium">{hardware.gpu_vram_used_mb || 0} / {hardware.gpu_vram_mb || 0} MB ({vramPct}%)</span>
-                  </div>
-                  <div className="w-full bg-bg-tertiary rounded-full h-1.5 overflow-hidden">
-                    <div className="h-1.5 rounded-full bg-gradient-to-r from-success to-emerald-400 transition-all duration-500" style={{ width: `${Math.min(100, vramPct)}%` }} />
-                  </div>
-                </div>
-                <div className="flex justify-between text-sm gap-3">
-                  <span className="text-text-secondary shrink-0">{t('dashboard.cpuUtil')}</span>
-                  <span className="font-medium">{(hardware as HardwareInfo).cpu_utilization ?? 0}%</span>
-                </div>
-              </>
-            ) : (
-              <p className="text-text-muted text-sm">{t('dashboard.noHardwareInfo')}</p>
-            )}
-          </div>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <Card>
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Activity size={16} className="text-accent" />
-            {t('dashboard.memoryUsage')}
-          </h3>
-          {history.length > 1 ? (
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={history}>
-                  <defs>
-                    <linearGradient id="ramGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={chartTheme.colors[0]} stopOpacity={0.35} />
-                      <stop offset="95%" stopColor={chartTheme.colors[0]} stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="vramGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={chartTheme.colors[1]} stopOpacity={0.35} />
-                      <stop offset="95%" stopColor={chartTheme.colors[1]} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} vertical={false} />
-                  <XAxis dataKey="time" stroke={chartTheme.axis} fontSize={11} tickLine={false} axisLine={false} minTickGap={40} />
-                  <YAxis stroke={chartTheme.axis} fontSize={11} tickLine={false} axisLine={false} width={52} />
-                  <Tooltip contentStyle={chartTooltipStyle(chartTheme)} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Area type="monotone" dataKey="ram_used_mb" stroke={chartTheme.colors[0]} strokeWidth={2} fillOpacity={1} fill="url(#ramGrad)" name="RAM Used (MB)" />
-                  <Area type="monotone" dataKey="vram_used_mb" stroke={chartTheme.colors[1]} strokeWidth={2} fillOpacity={1} fill="url(#vramGrad)" name="VRAM Used (MB)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <p className="text-text-muted text-sm py-10 text-center">{t('dashboard.collectingData')}</p>
-          )}
-        </Card>
-
-        <Card>
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Zap size={16} className="text-warning" />
-            {t('dashboard.cpuThroughput')}
-          </h3>
-          {history.length > 1 ? (
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={history}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} vertical={false} />
-                  <XAxis dataKey="time" stroke={chartTheme.axis} fontSize={11} tickLine={false} axisLine={false} minTickGap={40} />
-                  <YAxis yAxisId="left" stroke={chartTheme.axis} fontSize={11} tickLine={false} axisLine={false} width={42} domain={[0, 100]} unit="%" />
-                  <YAxis yAxisId="right" orientation="right" stroke={chartTheme.axis} fontSize={11} tickLine={false} axisLine={false} width={44} />
-                  <Tooltip contentStyle={chartTooltipStyle(chartTheme)} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Line yAxisId="left" type="monotone" dataKey="cpu" stroke={chartTheme.colors[2]} strokeWidth={2} dot={false} name="CPU %" />
-                  <Line yAxisId="right" type="monotone" dataKey="tokens_per_sec" stroke={chartTheme.colors[3]} strokeWidth={2} dot={false} name="Tokens / sec (60s window)" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <p className="text-text-muted text-sm py-10 text-center">{t('dashboard.collectingData')}</p>
-          )}
-        </Card>
-      </div>
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {items.map(item => (
+        <div key={item.label} className="glass-card p-3 text-center">
+          <p className="text-lg font-bold tabular-nums">{item.value}</p>
+          <p className="text-[10px] uppercase tracking-widest text-text-muted mt-0.5">{item.label}</p>
+        </div>
+      ))}
     </div>
   );
 }
 
-function QuickAction({ href, label, variant = 'primary' }: { href: string; label: string; variant?: 'primary' | 'secondary' }) {
+export default function Landing() {
+  const [agents, setAgents] = useState<{ name: string; role: string; description?: string; model?: string }[]>([]);
+
+  useEffect(() => {
+    fetchJSON('/v1/agents')
+      .then(d => setAgents(toArray<{ name: string; role: string; description?: string; model?: string }>(d)))
+      .catch(() => { /* agents optional on landing */ });
+  }, []);
+
   return (
-    <Link
-      href={href}
-      className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-        variant === 'primary'
-          ? 'bg-gradient-to-r from-accent to-accent-hover hover:from-accent-hover hover:to-accent text-white shadow-lg shadow-accent/25'
-          : 'bg-bg-tertiary hover:bg-bg-hover text-text-primary border border-border'
-      }`}
-    >
-      {label}
-      <ArrowRight size={14} />
-    </Link>
+    <div className="page-shell space-y-10">
+      <div className="brand-logo-wrap">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/static/ascii-logo.png" alt="Sovereign Agentic AI" className="brand-logo-img" />
+      </div>
+
+      {/* Hero */}
+      <section className="landing-hero glass-card p-6 sm:p-8 lg:p-10">
+        <div className="flex items-center gap-2 text-accent text-sm font-semibold uppercase tracking-widest mb-3">
+          <Sparkles size={16} /> Sovereign-Agentic-AI
+        </div>
+        <h1 className="landing-title text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight leading-tight">
+          Your personal <span className="gradient-text">multi-agent AI operating system</span>,<br className="hidden sm:block" />
+          running 100% locally on your GPU.
+        </h1>
+        <p className="landing-lead prose-ch mt-4 text-text-secondary text-base sm:text-lg">
+          Sovereign-Agentic-AI is a private, offline-first platform that turns local LLMs into a team of
+          specialized agents — coding, debugging, research, and an autonomous <strong>Agent&nbsp;X</strong> that
+          builds complete, production-ready software. It ships with an IDE-like Agentic Terminal, a knowledge
+          graph, isolated workspaces, computer vision, image generation and a fully responsive WebUI.
+        </p>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold bg-gradient-to-r from-accent to-accent-hover hover:from-accent-hover hover:to-accent text-white shadow-lg shadow-accent/25 transition-all"
+          >
+            <LayoutDashboard size={16} /> Enter Dashboard
+          </Link>
+          <Link
+            href="/chat"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium bg-bg-tertiary hover:bg-bg-hover text-text-primary border border-border transition-all"
+          >
+            Start Chatting <ArrowRight size={14} />
+          </Link>
+          <Link
+            href="/terminal"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium bg-bg-tertiary hover:bg-bg-hover text-text-primary border border-border transition-all"
+          >
+            <TerminalCodeIcon size={14} /> Agentic Terminal
+          </Link>
+        </div>
+        <div className="mt-5 flex flex-wrap gap-2 text-xs text-text-muted">
+          <span className="chip">Local &amp; Private</span>
+          <span className="chip">GGUF + Vulkan GPU</span>
+          <span className="chip">Sandboxed Computer Agent</span>
+          <span className="chip">Cloud Fallback</span>
+          <span className="chip">Responsive WebUI</span>
+          <span className="chip">Production-Ready Agents</span>
+          <span className="chip">Hugging Face Models</span>
+          <span className="chip">ARC Eval</span>
+        </div>
+      </section>
+
+      {/* Live system pulse */}
+      <section className="space-y-3">
+        <h2 className="section-title">
+          <PulseLineIcon size={20} className="text-accent" /> Live system pulse
+        </h2>
+        <SystemPulse />
+        <p className="text-xs text-text-muted prose-ch">Auto-refreshes every 15s — open the <Link href="/dashboard" className="text-accent hover:underline">Dashboard</Link> for full graphs, model tables and hardware telemetry.</p>
+      </section>
+
+      {/* Architecture */}
+      <section className="space-y-4">
+        <div>
+          <h2 className="section-title">
+            <OrchestratorIcon size={20} className="text-accent" /> Architecture
+          </h2>
+          <p className="text-sm text-text-muted prose-ch mt-1">One plan-then-execute pass per request: every task is classified, routed, planned, executed in parallel and judged — then the scores teach the router.</p>
+        </div>
+        <div className="flow-diagram">
+          {ARCH_STAGES.map((stage, i) => (
+            <div key={stage.title} className="flex flex-col sm:flex-row sm:items-center gap-2">
+              <div className="flow-stage glass-card flex-1">
+                <span className="icon-tile">{stage.icon}</span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold leading-tight">{stage.title}</p>
+                  <p className="text-[11px] text-text-muted mt-0.5 leading-relaxed">{stage.desc}</p>
+                </div>
+              </div>
+              {i < ARCH_STAGES.length - 1 && <span className="flow-arrow" aria-hidden="true">→</span>}
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-2 glass-card p-3">
+          <span className="text-[11px] uppercase tracking-widest text-text-muted font-semibold">Context layer</span>
+          {CONTEXT_LAYER.map(c => (
+            <span key={c.label} className="chip inline-flex items-center gap-1.5">
+              {c.icon} {c.label}
+            </span>
+          ))}
+        </div>
+      </section>
+
+      {/* Hardware-optimized models */}
+      <section className="space-y-4">
+        <div>
+          <h2 className="section-title">
+            <LocalEngineIcon size={20} className="text-accent" /> Hardware-optimized models
+          </h2>
+          <p className="text-sm text-text-muted prose-ch mt-1">Bundled GGUF models tuned for a 6&nbsp;GB AMD RX&nbsp;5600&nbsp;XT (Vulkan). Models load one at a time and LRU-evict under the VRAM budget — the router picks the best fit per task.</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 stagger">
+          {MODELS.map(m => (
+            <Card key={m.name} className="model-card">
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-semibold text-sm truncate">{m.name}</p>
+                <span className="chip-active text-[10px] px-2 py-0.5 shrink-0">{m.quant}</span>
+              </div>
+              <p className="text-[11px] text-text-muted mt-0.5">{m.role}</p>
+              <p className="text-xs mt-2 inline-flex items-center gap-1.5 text-text-secondary">
+                <LocalEngineIcon size={13} /> <span className="tabular-nums">{m.vram}</span> VRAM
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {m.tags.map(t => <span key={t} className="chip text-[10px] px-2 py-0.5">{t}</span>)}
+              </div>
+              <p className="text-[10px] text-text-muted mt-2 break-all font-mono">hf: {m.hf}</p>
+            </Card>
+          ))}
+        </div>
+        <p className="text-xs text-text-muted">Drop any GGUF into <code className="font-mono text-accent">models/</code> and it auto-registers as an executor — or register one from anywhere with <code className="font-mono text-accent">python run.py --add-model PATH --add-model-name NAME --add-model-role Executor</code>.</p>
+      </section>
+
+      {/* Hugging Face download guide */}
+      <section className="space-y-4">
+        <div>
+          <h2 className="section-title">
+            <HubDownloadIcon size={20} className="text-accent" /> Download models from Hugging Face
+          </h2>
+          <p className="text-sm text-text-muted prose-ch mt-1">Fetch GGUF quantizations into <code className="font-mono text-accent">models/</code> — the engine discovers and registers them on next start.</p>
+        </div>
+        <Card className="code-block space-y-3">
+          <p className="text-[11px] uppercase tracking-widest text-text-muted font-semibold">1 · CLI (recommended)</p>
+          <pre className="terminal-pre"><code>{`pip install "huggingface_hub[cli]"
+huggingface-cli download Qwen/Qwen2.5-3B-Instruct-GGUF \\
+  qwen2.5-3b-instruct-q4_k_m.gguf --local-dir models/`}</code></pre>
+          <p className="text-[11px] uppercase tracking-widest text-text-muted font-semibold pt-1">2 · Direct link (wget)</p>
+          <pre className="terminal-pre"><code>{`wget -P models/ https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf`}</code></pre>
+          <p className="text-[11px] uppercase tracking-widest text-text-muted font-semibold pt-1">3 · Tip</p>
+          <ul className="text-sm text-text-secondary list-disc pl-5 space-y-1">
+            <li>Pick a quant that fits your VRAM budget — the <span className="text-accent">Selection Room</span> routes tasks around what is loaded.</li>
+            <li>Pick GGUF quant sizes under your budget so multiple models can live together in memory.</li>
+            <li>No model installed yet? The <span className="text-accent">Cloud fallback</span> keeps the platform usable while you download.</li>
+          </ul>
+        </Card>
+      </section>
+
+      {/* Datasets */}
+      <section className="space-y-4">
+        <div>
+          <h2 className="section-title">
+            <DataLakeIcon size={20} className="text-accent" /> Bring your own datasets
+          </h2>
+          <p className="text-sm text-text-muted prose-ch mt-1">Everything is just files and folders on disk — feed the platform your own data for evals, training, retrieval and graphs.</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger">
+          {DATASETS.map(d => (
+            <Card key={d.title} className="hover-lift transition-all">
+              <div className="flex items-start gap-3">
+                <span className="w-10 h-10 rounded-xl bg-accent-soft text-accent flex items-center justify-center shrink-0">{d.icon}</span>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-semibold text-sm leading-tight">{d.title}</h3>
+                    <span className="chip text-[10px] px-1.5 py-0">{d.meta}</span>
+                  </div>
+                  <p className="text-text-muted text-xs mt-1 leading-relaxed">{d.desc}</p>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </section>
+
+      {/* Software / capabilities */}
+      <section className="space-y-4">
+        <h2 className="section-title">
+          <Sparkles size={20} className="text-accent" /> What's inside
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger">
+          {SOFTWARE.map(s => (
+            <Card key={s.title} className="hover-lift transition-all">
+              <div className="flex items-start gap-3">
+                <span className="icon-tile shrink-0">{s.icon}</span>
+                <div className="min-w-0">
+                  <h3 className="font-semibold text-sm leading-tight">{s.title}</h3>
+                  <p className="text-text-muted text-xs mt-1 leading-relaxed">{s.desc}</p>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </section>
+
+      {/* Agents showcase */}
+      <section className="space-y-4">
+        <div className="flex items-end justify-between gap-3 flex-wrap">
+          <h2 className="section-title mb-0">
+            <Bot size={20} className="text-accent" /> Agent personas
+          </h2>
+          <Link href="/dashboard" className="text-sm text-accent hover:underline inline-flex items-center gap-1">
+            Open Dashboard <ArrowRight size={14} />
+          </Link>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger">
+          {agents.length === 0 ? (
+            <p className="text-text-muted text-sm inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading agents…</p>
+          ) : (
+            agents.map(a => {
+              const featured = a.name === 'agent_x';
+              return (
+                <Link
+                  key={a.name}
+                  href={`/chat?agent=${encodeURIComponent(a.name)}`}
+                  className={`block rounded-2xl border p-4 transition-all hover-lift ${
+                    featured ? 'border-accent/50 bg-accent-soft shadow-glow' : 'border-border bg-surface'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-sm truncate inline-flex items-center gap-2">
+                      {featured ? <AgentXIcon size={16} className="text-accent" /> : <Bot size={16} className="text-text-muted" />}
+                      {a.role}
+                    </span>
+                    {featured && <span className="chip-active text-[10px] px-2 py-0.5">Featured</span>}
+                    {a.model && <span className="text-[10px] text-text-muted truncate">{a.model}</span>}
+                  </div>
+                  <p className="text-text-muted text-xs mt-1.5 leading-relaxed">
+                    {a.description || 'Specialized assistant persona.'}
+                  </p>
+                </Link>
+              );
+            })
+          )}
+        </div>
+      </section>
+
+      {/* Footer CTA */}
+      <section className="glass-card p-6 sm:p-8 text-center">
+        <h3 className="text-lg font-semibold">Ready to put your local AI to work?</h3>
+        <p className="text-text-muted text-sm mt-1.5 max-w-xl mx-auto">
+          Launch the dashboard to watch models, hardware and throughput live — or jump straight into the Agentic Terminal and let Agent X build your next project.
+        </p>
+        <div className="mt-4 flex justify-center flex-wrap gap-3">
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold bg-gradient-to-r from-accent to-accent-hover hover:from-accent-hover hover:to-accent text-white shadow-lg shadow-accent/25 transition-all"
+          >
+            <LayoutDashboard size={16} /> Enter Dashboard
+          </Link>
+          <Link
+            href="/terminal"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium bg-bg-tertiary hover:bg-bg-hover text-text-primary border border-border transition-all"
+          >
+            <TerminalCodeIcon size={14} /> Open Agentic Terminal
+          </Link>
+        </div>
+        <p className="text-text-muted text-xs mt-6">Built by Rhasan (Rhasan_Indie_dev).</p>
+      </section>
+    </div>
   );
 }
