@@ -10,6 +10,7 @@
 
 <p align="center">
   <img alt="Tests" src="https://img.shields.io/badge/tests-759%20%2F%200-brightgreen">
+  <img alt="CI" src="https://github.com/rbkhan007/Sovereign-Agentic-AI/actions/workflows/ci.yml/badge.svg">
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
   <img alt="Backend" src="https://img.shields.io/badge/backend-llama.cpp%20(Vulkan)-orange">
@@ -50,6 +51,20 @@ that a **small, coordinated multi-agent system** can punch above its weight:
 - **Memory that compounds.** Conversations, documents and wiki-links become a queryable
   knowledge graph.
 - **Privacy by construction.** No telemetry, no forced cloud, no lock-in.
+
+---
+
+## 🖼️ Screenshots
+
+Real captures from the running system (AMD RX 5600 XT / Vulkan, i3-10100F).
+
+| Landing page | Live Dashboard |
+| :---: | :---: |
+| ![Landing](assets/screenshots/landing.png) | ![Dashboard](assets/screenshots/dashboard.png) |
+
+| Agentic Terminal | Chat |
+| :---: | :---: |
+| ![Terminal](assets/screenshots/terminal.png) | ![Chat](assets/screenshots/chat.png) |
 
 ---
 
@@ -304,7 +319,8 @@ Legitimate question. Trust here is built on **verifiability, not authority**:
 - **Open source under MIT** — every line is inspectable; you can audit, fork and self-host.
 - **Reproducible** — `requirements.txt` / `pip install -e .` gives a deterministic local build.
 - **Tested** — **759 offline tests, 0 failures**, plus a full static audit (mypy, pyflakes,
-  bandit, vulture, pydocstyle, ESLint) that is clean.
+  bandit, vulture, pydocstyle, ESLint) that is clean. Both run automatically in
+  [GitHub Actions CI](.github/workflows/ci.yml) on every push.
 - **Transparent about limits** — known, non-critical issues are tracked publicly in
   [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md); nothing is hidden.
 - **Privacy by construction** — no telemetry; data stays on your device unless you opt in.
@@ -398,6 +414,7 @@ python run_deep_audit.py     # mypy + pyflakes + bandit + vulture + pydocstyle +
 
 | Check | Result |
 |-------|--------|
+| GitHub Actions CI | Python tests + Next.js build on every push (badge above) |
 | Unit tests | **759 / 759 passed** |
 | Pyflakes / Bandit / Vulture | clean |
 | TypeScript build | pass (13 routes) |
