@@ -70,12 +70,18 @@ sovereign-llm             # full mode (Web UI + CLI + API)
 
 ```bash
 python run.py                                  # full mode (recommended)
+python run.py web                              # Web UI only
+python run.py cli                              # Terminal CLI only (see /terminal setup guide)
 python run.py --image-gen --vision --automl     # enable opt-in features
 python run.py --db --db-password postgres        # PostgreSQL + pgvector memory
-python run.py --nextjs                          # Next.js dashboard on :3001
+python run.py --nextjs                          # Next.js dev server on :3001
 ```
 
 **Typical workflows**
+- **WebUI (multipage):** `/` is a landing page (architecture flow, hardware models,
+  Hugging Face download guide, datasets, live system pulse), `/dashboard` is the live
+  metrics dashboard, and `/terminal` is the Agentic Terminal — an IDE-style workspace
+  plus a full **CLI setup & usage guide**.
 - **Chat (UI):** open the dashboard, pick an agent/skill, stream answers.
 - **Chat (API):** POST `/v1/chat/completions` (OpenAI-compatible) or `/v1/chat/auto-stream`.
 - **Knowledge:** upload `.md` files to a workspace → wiki-links, `#tags` and backlinks
@@ -252,7 +258,8 @@ _matches(pred, target, exact):
 | Workspaces + file knowledge | ✅ | Chunk-embedded, per-workspace search |
 | Knowledge graph (wiki-links, tags, backlinks) | ✅ | pgvector + recursive-CTE shortest path |
 | Agents & skills (API/CLI/MCP) | ✅ | Runtime CRUD, JSON-persisted |
-| Next.js glassmorphism dashboard | ✅ | Dark/light, live sparklines |
+| Multipage WebUI (Next.js) | ✅ | Landing `/` + live `/dashboard` + Agentic Terminal `/terminal` (CLI setup guide) |
+| Agentic Terminal | ✅ | Sandboxed shell / Python / file-tree, plus `/v1/terminal/*` HTTP API |
 | Image generation (Stable Diffusion) | ✅ opt-in | CPU, RAM-guarded, 256–512 px |
 | Vision (Gemma 3) | ✅ default-on | CPU, resource-guarded |
 | AutoML (auto-sklearn) | ✅ opt-in | Linux-only |

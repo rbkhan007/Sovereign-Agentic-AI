@@ -39,6 +39,8 @@ Severity: `BUG` (wrong behaviour), `DESIGN` (intentional limitation / refactor),
 - `graph_store.py:29-41` — `threading` imported at module top (no `NameError`, `_SCHEMA_ENSURE_LOCK` guard works).
 - `arc.py:89` — removed non-existent `model_manager.default_model` read (dead branch).
 - `frontend` — colorful density-based ASCII logo (light theme), Agents group in the sidebar with full persona names + role + icons, `?agent=` preselects the persona in chat, light-theme shadow/glass polish.
+- `frontend` — multipage WebUI: landing `/` (architecture flow, hardware models, HF download guide, datasets, live pulse), live `/dashboard`, and `/terminal` rebuilt as a full CLI setup & usage guide; custom hand-drawn icon set (`components/icons.tsx`); ASCII logo shipped as PNG (`/static/ascii-logo.png` + `/ascii-logo.png` alias); fluid typography + entrance animations + glass hover glow.
+- `api.py` — terminal endpoints (`/v1/terminal/exec|python|fs/*`) return real `HTTPException` statuses (400/404/408/500) instead of opaque `_api_error` strings.
 
 ---
 

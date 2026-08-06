@@ -135,6 +135,17 @@ GET  /v1/memory/recent           # Recent memories (?limit=&agent=)
 POST /v1/memory/clear            # Clear all memories
 POST /v1/memory/prune            # Prune old memories (?max_age_days=)
 
+## Agentic Terminal API (sandboxed shell/python + project file ops; used by /terminal)
+
+POST /v1/terminal/exec           # Run a sandboxed shell command ({command}) -> {stdout, exit_code}
+POST /v1/terminal/python         # Execute code as Python ({code}) -> {stdout, exit_code}
+GET  /v1/terminal/fs/tree        # Project file tree (?depth=&max_nodes=)
+POST /v1/terminal/fs/read        # Open a file ({path, limit}) -> {content}
+POST /v1/terminal/fs/write       # Save a file ({path, content})
+POST /v1/terminal/fs/mkdir       # Create a folder ({path})
+POST /v1/terminal/fs/delete      # Delete a file/folder ({path})
+GET  /ascii-logo.png             # Legacy logo URL -> redirects/serves frontend/public/ascii-logo.png
+
 ## Workspace API (isolated chat areas backed by `workspaces`/`workspace_files` tables; in-memory fallback when DB off)
 
 GET  /v1/workspaces                # List workspaces (default is protected)
@@ -198,8 +209,8 @@ computer_agent.py     # ReAct computer-use agent: shell, file I/O, web, python, 
 gui_automation.py     # Native Windows keyboard & mouse control (ctypes SendInput, zero deps; Pillow for screenshots) - "human hands" for the computer agent
 api.py              # FastAPI server (all API endpoints incl. workspaces, LoRA upload/train, skills/agents CRUD, images + admin ring-buffer logs; HTTP/2 with httptools fallback; GET /mcp for tool discovery)
 cli.py              # Terminal CLI: live token streaming by default, ensemble /parallel mode, /agent add|delete & /skill add|delete personas, /mcp tool listing + calling, /code, /harness (stats/reset/adjust/export/import), /cloud, /arc, /context, /status, sessions (JSON under sessions/), Windows line-editor input
-web_ui.py           # Mounts Next.js build (frontend/build) + inline HTML fallback + /generated images; serves /,/chat,/workspace,/database,/models,/admin,/tools,/settings,/help with injected auth bootstrap
-frontend/           # Next.js glassmorphism UI (run.py --nextjs) in TypeScript (.tsx/.ts): Dashboard (live sparklines with useChartTheme hook) / Chat (markdown rendering, suggestion chips, auto-resize textarea, conversation search + export as markdown, per-message copy) / Workspace (Protected badge on default workspace, file content preview) / Database (connection pool, IVFFlat, agent breakdown, table size) / Models (lazy load/unload, role filter chips, per-model n_ctx/temperature/max_tokens) / Tools (summarize·analyze·translate·agents·skills·images with copy-to-clipboard buttons) / Graph (node/tags/recent tabs, semantic hybrid search, click-to-view node content) / Admin (metrics, threads, logs, LoRA upload+train, skills/agents add+delete, interactive MCP tool calling, harness table with reset/adjust, per-tab loading skeletons) / Settings (API keys, live /v1/config editor, rate-limit reset to defaults) / Help (collapsible sections, pgvector/pgsql setup guide); components: ErrorBoundary, ThemeProvider (class-based dark/light), PageTransition, Sidebar (collapse/expand, backend health, mobile responsive); lib: api.ts (fetchJSON+token helpers), chartTheme.ts (useChartTheme hook), i18n.ts
+web_ui.py           # Mounts Next.js build (frontend/build) + inline HTML fallback + /generated images; serves /,chat,/dashboard,/terminal,/workspace,/database,/models,/admin,/tools,/settings,/help with injected auth bootstrap
+frontend/           # Next.js glassmorphism multipage UI (run.py --nextjs) in TypeScript (.tsx/.ts): Landing / (hero, architecture flow, hardware models + Hugging Face download guide, datasets, live system pulse, custom icon set) / Dashboard (live sparklines with useChartTheme hook) / Terminal (Agentic Terminal: 3-pane IDE + full CLI setup guide) / Chat (markdown rendering, suggestion chips, auto-resize textarea, conversation search + export as markdown, per-message copy) / Workspace (Protected badge on default workspace, file content preview) / Database (connection pool, IVFFlat, agent breakdown, table size) / Models (lazy load/unload, role filter chips, per-model n_ctx/temperature/max_tokens) / Tools (summarize·analyze·translate·agents·skills·images with copy-to-clipboard buttons) / Graph (node/tags/recent tabs, semantic hybrid search, click-to-view node content) / Admin (metrics, threads, logs, LoRA upload+train, skills/agents add+delete, interactive MCP tool calling, harness table with reset/adjust, per-tab loading skeletons) / Settings (API keys, live /v1/config editor, rate-limit reset to defaults) / Help (collapsible sections, pgvector/pgsql setup guide); components: ErrorBoundary, ThemeProvider (class-based dark/light), PageTransition, Sidebar (collapse/expand, backend health, mobile responsive); lib: api.ts (fetchJSON+token helpers), chartTheme.ts (useChartTheme hook), i18n.ts
 test_load.py        # Load/balance stress tool (cheap endpoints + real chat generations)
 
 ## GPU Hardware
@@ -259,6 +270,7 @@ test_load.py        # Load/balance stress tool (cheap endpoints + real chat gene
 - **Frontend Theme**: CSS variable-based light/dark theme with `MutationObserver`-driven chart hooks; `@tailwindcss/typography` for prose/markdown; glassmorphism cards with hover-lift; `suppressHydrationWarning` + inline FOUC prevention script; `ErrorBoundary` wraps page content; reduced-motion support; badge variants (success/danger); scrollbar polish; light theme input/button polish
 - **Frontend Streaming**: proper `data:` frame SSE parsing with auth token; markdown rendering with `react-markdown` + `react-syntax-highlighter` + copy button; auto-resize textarea
 - **Frontend Accessibility**: `aria-expanded` on collapsible sections; `aria-label` attributes; label-input linking; focus-visible outlines
+- **Multipage WebUI**: `/` is a landing page (hero, architecture flow, hardware-optimized model cards, Hugging Face download guide, datasets, live system pulse), `/dashboard` is the live metrics dashboard, and `/terminal` is the Agentic Terminal (IDE workspace + full CLI setup guide); the ASCII logo is served as a PNG (`/static/ascii-logo.png`, legacy `/ascii-logo.png` redirects) and a hand-drawn custom SVG icon set (`components/icons.tsx`) replaces stock icons on the landing + sidebar; fluid `clamp()` typography, staggered entrance animations, glass hover glow, focus rings and `::selection` polish; brand renamed to "Sovereign AI" in the sidebar
 
 ---
 **Built by Rakibul Hasan (Rhasan_Indie_dev).**

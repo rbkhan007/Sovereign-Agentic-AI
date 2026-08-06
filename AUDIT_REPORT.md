@@ -11,6 +11,12 @@
 
 ## Status: v1.0.0 READY (blockers fixed; non-critical items deferred to v1.1.0)
 
+> **Latest status (post-WebUI batch):** `python test_all.py` → **759/0**; `python run_deep_audit.py`
+> → **DEEP AUDIT PASSED** (pylint, mypy, pyflakes, bandit, vulture, pydocstyle, ESLint);
+> `npm run build` clean (13 static routes). Newly covered: multipage WebUI (landing + live
+> dashboard + Agentic Terminal setup guide), `/v1/terminal/*` endpoints, custom icon set.
+
+
 This report consolidates findings from the full static audit and deep verification pass.
 
 ### Previously Reported Issues (now fixed)
