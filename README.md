@@ -9,22 +9,39 @@
 </p>
 
 <p align="center">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-808%20%2F%200-brightgreen">
-  <img alt="CI" src="https://github.com/rbkhan007/Sovereign-Agentic-AI/actions/workflows/ci.yml/badge.svg">
-  <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
-  <img alt="Backend" src="https://img.shields.io/badge/backend-llama.cpp%20(Vulkan)-orange">
-  <img alt="Frontend" src="https://img.shields.io/badge/frontend-Next.js%20%2B%20TS-8A2BE2">
-  <img alt="Audit" src="https://img.shields.io/badge/static%20audit-clean-success">
+  <a href="https://github.com/rbkhan007/Sovereign-Agentic-AI/actions/workflows/ci.yml">
+    <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/rbkhan007/Sovereign-Agentic-AI/ci.yml?style=flat-square">
+  </a>
+  <a href="https://img.shields.io/badge/tests-808%20%2F%200-brightgreen?style=flat-square">
+    <img alt="Tests" src="https://img.shields.io/badge/tests-808%20%2F%200-brightgreen?style=flat-square">
+  </a>
+  <a href="https://img.shields.io/badge/version-v1.3-blue?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-v1.3-blue?style=flat-square">
+  </a>
+  <a href="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square">
+    <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square">
+  </a>
+  <a href="https://img.shields.io/badge/license-MIT-blue?style=flat-square">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square">
+  </a>
+  <a href="https://img.shields.io/badge/backend-llama.cpp%20(Vulkan)-orange?style=flat-square">
+    <img alt="Backend" src="https://img.shields.io/badge/backend-llama.cpp%20(Vulkan)-orange?style=flat-square">
+  </a>
+  <a href="https://img.shields.io/badge/frontend-Next.js%20%2B%20TS-8A2BE2?style=flat-square">
+    <img alt="Frontend" src="https://img.shields.io/badge/frontend-Next.js%20%2B%20TS-8A2BE2?style=flat-square">
+  </a>
+  <a href="https://img.shields.io/badge/static%20audit-clean-success?style=flat-square">
+    <img alt="Audit" src="https://img.shields.io/badge/static%20audit-clean-success?style=flat-square">
+  </a>
 </p>
 
 ---
 
-## 📖 About this project
+## 📖 About
 
 **Sovereign-Agentic-AI** is an open-source, local-first agentic AI stack. It turns small
 open-weight models (running on your CPU/GPU through `llama.cpp`) into a **cooperating team**:
-a *Strategist* that reasons about the task and writes a plan, a *router* that picks the
+a *Strategist* that reasons about the task and writes a plan, a *Router* that picks the
 best *Executor* model for the job, and (optionally) several executors that answer in
 parallel while the strategist *judges* the best reply.
 
@@ -38,75 +55,54 @@ web search).
 
 ---
 
-## 🎯 Why this project exists
+## 🎯 Why this exists
 
 Most local LLM tools are single-model chat wrappers. Sovereign-Agentic-AI exists to show
 that a **small, coordinated multi-agent system** can punch above its weight:
 
-- **Reasoning via planning.** A dedicated strategist model plans before answering, which
-  improves quality on code, math and multi-step tasks.
-- **Adaptive routing.** A learned fitness score picks the right executor per task instead
-  of always using the biggest model.
-- **Accountability.** Every answer is judged, scored and recorded, so quality is measurable.
-- **Memory that compounds.** Conversations, documents and wiki-links become a queryable
-  knowledge graph.
-- **Privacy by construction.** No telemetry, no forced cloud, no lock-in.
+| Pillar | What it means |
+|--------|---------------|
+| 🧠 **Reasoning via planning** | A dedicated strategist model plans before answering, improving quality on code, math and multi-step tasks |
+| 🎯 **Adaptive routing** | A learned fitness score picks the right executor per task instead of always using the biggest model |
+| ⚖️ **Accountability** | Every answer is judged, scored and recorded, so quality is measurable |
+| 🧵 **Memory that compounds** | Conversations, documents and wiki-links become a queryable knowledge graph |
+| 🔒 **Privacy by construction** | No telemetry, no forced cloud, no lock-in |
 
 ---
 
-## 🖼️ Screenshots
-
-Real captures from the running system (AMD RX 5600 XT / Vulkan, i3-10100F).
-
-| Landing page | Live Dashboard |
-| :---: | :---: |
-| ![Landing](assets/screenshots/landing.png) | ![Dashboard](assets/screenshots/dashboard.png) |
-
-| Agentic Terminal | Chat |
-| :---: | :---: |
-| ![Terminal](assets/screenshots/terminal.png) | ![Chat](assets/screenshots/chat.png) |
-
----
-
-## 🧭 How to use it
-
-**1. Install**
+## 🚀 Quick start
 
 ```bash
+# 1. Install
 pip install -e .          # or: pip install -r requirements.txt
-sovereign-llm             # full mode (Web UI + CLI + API)
-```
 
-**2. Add models.** Drop `.gguf` files into `models/` (expected: `Hy-MT2-1.8B-Q4_K_M.gguf`,
-`gemma-4-E4B-it-qat-UD-Q2_K_XL.gguf`, `Qwen2.5-Omni-3B-Q4_K_M.gguf`,
-`mythos-nano-Q5_K_M.gguf`). Any `.gguf` is auto-discovered.
+# 2. Add models — drop .gguf files into models/ (auto-discovered)
+#    Expected: Hy-MT2-1.8B, Gemma 4 E4B, Qwen2.5-Omni 3B, Mythos-nano
 
-**3. Run**
-
-```bash
+# 3. Run
 python run.py                                  # full mode (recommended)
 python run.py web                              # Web UI only
-python run.py cli                              # Terminal CLI only (see /terminal setup guide)
-python run.py --image-gen --vision --automl     # enable opt-in features
-python run.py --db --db-password postgres        # PostgreSQL + pgvector memory
-python run.py --nextjs                          # Next.js dev server on :3001
+python run.py cli                              # Terminal CLI only
+python run.py --image-gen --vision --automl    # enable opt-in features
+python run.py --db --db-password postgres       # PostgreSQL + pgvector memory
+python run.py --nextjs                         # Next.js dev server on :3001
 ```
 
-**Typical workflows**
-- **WebUI (multipage):** `/` is a landing page (architecture flow, hardware models,
-  Hugging Face download guide, datasets, live system pulse), `/dashboard` is the live
-  metrics dashboard, and `/terminal` is the Agentic Terminal — an IDE-style workspace
-  plus a full **CLI setup & usage guide**.
-- **Chat (UI):** open the dashboard, pick an agent/skill, stream answers.
-- **Chat (API):** POST `/v1/chat/completions` (OpenAI-compatible) or `/v1/chat/auto-stream`.
-- **Knowledge:** upload `.md` files to a workspace → wiki-links, `#tags` and backlinks
-  become a searchable graph.
-- **Automation:** drive it via `/mcp` JSON-RPC from another tool.
-- **Evaluation:** `python -m arc` / `POST /v1/...` for ARC grid-reasoning accuracy.
+<details>
+<summary><b>📂 Typical workflows</b></summary>
+
+- **WebUI (multipage):** `/` landing (architecture flow, hardware models, Hugging Face guide, datasets, live system pulse), `/dashboard` live metrics, `/terminal` Agentic Terminal with CLI setup guide
+- **Chat (UI):** Open dashboard, pick agent/skill, stream answers
+- **Chat (API):** `POST /v1/chat/completions` (OpenAI-compatible) or `POST /v1/chat/auto-stream`
+- **Knowledge:** Upload `.md` to workspace → wiki-links, `#tags`, backlinks become searchable graph
+- **Automation:** Drive via `/mcp` JSON-RPC from external tools
+- **Evaluation:** `python -m arc` / ARC endpoint for grid-reasoning accuracy
+
+</details>
 
 ---
 
-## 🏗️ Architecture & structural diagrams
+## 🏗️ Architecture
 
 ### System overview
 
@@ -115,10 +111,10 @@ flowchart TD
     U[User / API / CLI] --> R[Router.classify_task]
     R --> O[Orchestrator]
     O --> P[Strategist: plan 2 candidates]
-    O --> M[(pgvector memory + knowledge graph)]
+    O --> M[(pgvector memory + graph)]
     O --> W[Optional web search]
     P --> E[Executor generate]
-    E --> J[Strategist judges 0 to 10]
+    E --> J[Strategist judges 0–10]
     J --> H[Harness.record]
     H --> RES[Response + memory store]
     RES --> U
@@ -128,7 +124,7 @@ flowchart TD
       X[Gemma 4 E4B Executor]
       Q[Qwen2.5-Omni 3B Executor]
       M[Mythos-nano Executor]
-      G[Auto-discovered gguf]
+      G[Auto-discovered .gguf]
     end
     O -.uses.-> S
     O -.uses.-> X
@@ -137,14 +133,14 @@ flowchart TD
     O -.uses.-> G
 ```
 
-### Request lifecycle (sequence)
+### Request lifecycle
 
 ```mermaid
 sequenceDiagram
     participant U as User
     participant R as Router
     participant O as Orchestrator
-    participant S as Strategist (Hy-MT2)
+    participant S as Strategist
     participant E as Executor(s)
     participant H as Harness
     U->>R: prompt
@@ -153,7 +149,7 @@ sequenceDiagram
     S-->>O: best plan
     O->>E: generate (parallel)
     E-->>O: candidates
-    O->>S: judge 0 to 10
+    O->>S: judge 0–10
     S-->>O: scores
     O->>H: record(task, model, ok, latency)
     O-->>U: response + done event
@@ -175,22 +171,20 @@ graph TD
 
 ---
 
-## ⚙️ How it works (the math)
+## ⚙️ How it works
 
 ### 1. Task classification
 ```text
-classify_task(text) -> one of
-  {code, math, summarize, translate, tool, creative, general}
+classify_task(text) → {code, math, summarize, translate, tool, creative, general}
 ```
 
 ### 2. Planning — two candidate plans
-The strategist generates **2 candidate plans** (`i in {0,1}`) at temperatures
-`0.3 + i*0.1`; the higher-scoring plan wins:
+The strategist generates **2 candidate plans** at temperatures `0.3 + i*0.1`:
 
 ```text
 score(plan) = len(plan)
-             + 10 * 1{"FINAL_ANSWER" in plan}
-             +  5 * 1{len(plan) > 50}
+           + 10 × 1{"FINAL_ANSWER" in plan}
+           +  5 × 1{len(plan) > 50}
 
 best_plan = argmax score(plan)
 ```
@@ -199,65 +193,47 @@ best_plan = argmax score(plan)
 Each `(task, model)` earns fitness from **success**, **speed** and **recency**:
 
 ```text
-success = 1 - errors / attempts
-speed   = min(2.0, 1 / avg_latency)      # avg_latency in seconds
-recent  = decay ^ age ,  age = generation - last_gen ,  decay = 0.95
+success = 1 − errors / attempts
+speed   = min(2.0, 1 / avg_latency)
+recent  = decay ^ age  (decay = 0.95)
 
-fitness(task, model) = 60*success + 30*speed + 10*recent
+fitness(task, model) = 60×success + 30×speed + 10×recent
 ```
 
-Routing is **epsilon-greedy** (`epsilon = 0.15`):
+Routing is **epsilon-greedy** (`ε = 0.15`):
 
 ```text
 choose(task, candidates):
-    with probability 0.15: return random(candidates)   # explore
-    else:                  return ranked(task, candidates)[0]  # exploit
+    15% → random(candidates)    # explore
+    85% → best fitness          # exploit
 ```
 
 ### 4. Parallel execution & judging
-Up to `parallel_max` (default 2) executors answer concurrently; the strategist scores
-each 0–10 and the best wins:
+Up to `parallel_max` executors answer concurrently; strategist scores each 0–10:
 
 ```text
-judge(Q, A) in [0, 10]
-final = argmax_{m} judge(Q, A_m)
+final = argmax_m judge(question, answer_m)
 ```
 
 ### 5. Auto-streaming decision
 ```text
-should_auto_stream =
-    auto_stream_enabled
-    AND max_tokens <= auto_stream_max_tokens        # cap = 2048
-    AND ( use_planning
-        OR len(message) > 100
-        OR message matches code|creative keywords )
-
-max_tokens := min(max_tokens, auto_stream_max_tokens)   # hard cap
-```
-
-SSE emits a terminal `done` event:
-
-```json
-{"type":"start",   "model":"gemma-4-e4b"}
-{"type":"thinking","content":"..."}
-{"type":"response","content":"..."}
-{"type":"done",    "model":"gemma-4-e4b", "tokens":142, "elapsed":3.1}
+stream when:
+  auto_stream enabled
+  AND max_tokens ≤ cap (2048)
+  AND (planning ON OR msg > 100 chars OR code/creative keywords)
 ```
 
 ### 6. Throughput
 ```text
-tokens_per_sec_window = sum(tokens in last 60s) / 60
+tokens_per_sec_window = tokens(last 60s) / 60
 tokens_per_sec        = total_tokens_out / uptime
 ```
 
 ### 7. ARC reasoning accuracy
 ```text
-accuracy = correct / total
-_matches(pred, target, exact):
-    if exact:  return parse_grid(pred) == target
-    else:      return len(pred) <= len(target)
-                and every pred row has len == len(target[0])
-                and element-wise pred == target
+matches(pred, target):
+  exact: parse_grid(pred) == target
+  else:  shape match + element-wise equality
 ```
 
 ---
@@ -269,21 +245,21 @@ _matches(pred, target, exact):
 | Multi-agent plan → execute → judge | ✅ | Hy-MT2 plans, executors run, strategist judges |
 | Adaptive per-task model routing | ✅ | Epsilon-greedy harness fitness |
 | Parallel multi-model answers | ✅ | ≤ `parallel_max`, judged 0–10 |
-| Token streaming + auto-stream | ✅ | SSE, per-request stream/batch |
-| GBNF auto-approved workflow | ✅ | Agent Loop: [THINK]/[BASH]/[READ]/[WRITE]/[DONE] |
+| Token streaming + auto-stream | ✅ | SSE, per-request stream/batch decision |
+| GBNF auto-approved workflow | ✅ | `[THINK]` / `[BASH]` / `[READ]` / `[WRITE]` / `[DONE]` agent loop |
 | Workspaces + file knowledge | ✅ | Chunk-embedded, per-workspace search |
 | Knowledge graph (wiki-links, tags, backlinks) | ✅ | pgvector + recursive-CTE shortest path |
-| Agents & skills (API/CLI/MCP) | ✅ | Runtime CRUD, JSON-persisted |
-| Multipage WebUI (Next.js) | ✅ | Landing `/` + live `/dashboard` + Agentic Terminal `/terminal` |
-| Agentic Terminal | ✅ | Sandboxed shell / Python / file-tree, plus `/v1/terminal/*` HTTP API |
+| Agents & skills (API/CLI/MCP) | ✅ | Runtime CRUD, JSON-persisted, MCP discovery |
+| Multipage WebUI (Next.js) | ✅ | Landing `/` + live `/dashboard` + Terminal `/terminal` |
+| Agentic Terminal | ✅ | Sandboxed shell / Python / file-tree + `/v1/terminal/*` API |
 | Image generation (Stable Diffusion) | ✅ opt-in | CPU, RAM-guarded, 256–512 px |
-| Vision (Gemma 3) | ✅ default-on | CPU, resource-guarded |
+| Vision (Gemma 3) | ✅ default-on | CPU, resource-guarded, lazy-load |
 | AutoML (auto-sklearn) | ✅ opt-in | Linux-only |
-| Self-healing agent | ⚠️ gated | Diagnosis always; **execution** needs `--allow-unsafe-healing` |
+| Self-healing agent | ⚠️ gated | Diagnosis always; execution needs `--allow-unsafe-healing` |
 | OpenAI-compatible API | ✅ | Drop-in `/v1/chat/completions` |
 | Cloud fallback | ✅ opt-in | Rate-limited OpenAI/Claude/Groq/OpenRouter/Gemini |
 | Model management UI | ✅ | Pull from URL, install, uninstall, sizes |
-| Hardware monitor (SSE) | ✅ | 30s tick, LRU eviction, CPU throttle, `/v1/hardware/stream` |
+| Hardware monitor (SSE) | ✅ | 1s SSE, LRU eviction, CPU throttle |
 | CLI tab-completion + help | ✅ | Readline + Windows custom editor, categorized `/help` |
 
 ---
@@ -302,17 +278,20 @@ _matches(pred, target, exact):
 | Vision | description text | From `--vision` |
 | AutoML model | `.pkl` | From `--automl` |
 | Metrics / Harness stats | JSON | `success_rate`, `avg_latency`, `tokens_per_sec_window`, fitness |
+| Workflow trace events | SSE `status → trace → trace_result → complete/error` | Live GBNF action stream |
+| Hardware readings | SSE JSON (1s interval) | RAM, VRAM, CPU via `/v1/hardware/stream` |
+| Model files | `.gguf` on disk | Listed by `/v1/models/installed`; pulled via `/v1/models/pull` |
 
 ---
 
-## 📊 SWOT analysis
+## 📊 SWOT
 
 | | |
 |---|---|
-| **Strengths** | 100% local/private; multi-agent planning+judging; adaptive routing; knowledge graph; 808 automated tests; clean static audit; MIT + transparent. |
-| **Weaknesses** | Small models → weaker than frontier LLMs; runs best on modest hardware (slow on CPU); vision/AutoML/image-gen are resource-heavy; some features Linux-only (AutoML). |
-| **Opportunities** | Drop-in OpenAI-compatible API; MCP integration; workspace knowledge; extensible agents/skills; easy to add new GGUF models; ideal for on-prem / air-gapped deployments. |
-| **Threats** | Upstream `llama.cpp`/transformers API drift; large-model competition; hardware fragmentation (Vulkan/ROCm/CUDA); supply-chain risk in optional deps. |
+| **Strengths** | 100% local/private; multi-agent planning+judging; adaptive routing; knowledge graph; 808 automated tests; clean static audit; MIT + transparent |
+| **Weaknesses** | Small models → weaker than frontier LLMs; runs best on modest hardware (slow on CPU); vision/AutoML/image-gen are resource-heavy; some features Linux-only (AutoML) |
+| **Opportunities** | Drop-in OpenAI-compatible API; MCP integration; workspace knowledge; extensible agents/skills; easy to add new GGUF models; ideal for on-prem / air-gapped deployments |
+| **Threats** | Upstream `llama.cpp`/transformers API drift; large-model competition; hardware fragmentation (Vulkan/ROCm/CUDA); supply-chain risk in optional deps |
 
 ---
 
@@ -320,98 +299,42 @@ _matches(pred, target, exact):
 
 Legitimate question. Trust here is built on **verifiability, not authority**:
 
-- **Open source under MIT** — every line is inspectable; you can audit, fork and self-host.
-- **Reproducible** — `requirements.txt` / `pip install -e .` gives a deterministic local build.
-- **Tested** — **808 offline tests, 0 failures**, plus a full static audit (mypy, pyflakes,
-  bandit, vulture, pydocstyle, ESLint) that is clean. Both run automatically in
-  [GitHub Actions CI](.github/workflows/ci.yml) on every push.
-- **Transparent about limits** — known, non-critical issues are tracked publicly in
-  [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md); nothing is hidden.
-- **Privacy by construction** — no telemetry; data stays on your device unless you opt in.
-- **Security-hardened** — the self-healing code-execution is gated, terminal shell
-  commands are sandboxed to the project directory, uploaded files are served safely, and
-  graph referential integrity is enforced (see below).
-- **Documented** — architecture, math, API and safety are all written down
-  ([AGENTS.md](AGENTS.md), [AUDIT_REPORT.md](AUDIT_REPORT.md), [CHANGELOG.md](CHANGELOG.md),
-  [KNOWN_ISSUES.md](KNOWN_ISSUES.md)).
+- **Open source under MIT** — every line is inspectable; you can audit, fork and self-host
+- **Reproducible** — `requirements.txt` / `pip install -e .` gives a deterministic local build
+- **Tested** — **808 offline tests, 0 failures**, plus a full static audit (mypy, pyflakes, bandit, vulture, pydocstyle, ESLint) that is clean. Both run automatically in [GitHub Actions CI](.github/workflows/ci.yml)
+- **Transparent about limits** — known, non-critical issues are tracked publicly in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md)
+- **Privacy by construction** — no telemetry; data stays on your device unless you opt in
+- **Security-hardened** — self-healing code-execution is gated, terminal shell commands are sandboxed to the project directory, uploaded files are served safely, graph referential integrity is enforced
+- **Documented** — architecture, math, API and safety are all written down ([AGENTS.md](AGENTS.md), [AUDIT_REPORT.md](AUDIT_REPORT.md), [CHANGELOG.md](CHANGELOG.md), [KNOWN_ISSUES.md](KNOWN_ISSUES.md))
 
-> If you can read Python, you can verify every claim on this page yourself. That is the
-> point of local-first software.
+> If you can read Python, you can verify every claim on this page yourself. That is the point of local-first software.
 
 ---
 
 ## 🔐 Security & hardening
 
-- **Self-healing RCE gate** — `heal()` refuses to run caller-supplied Python unless
-  `--allow-unsafe-healing` is passed. `--healing` alone only enables diagnosis.
-- **Sandboxed shell commands (v1.2.1)** — `/v1/terminal/exec` rejects commands that escape
-  the project directory: `..` traversal (incl. spaced escapes), drive-absolute paths
-  (`C:\`), UNC paths, and absolute `cd`. Sandboxed `shell=True` subprocesses stay confined
-  to the project root.
-- **Stored XSS** — `/generated` is served by `SafeStaticFiles`: `X-Content-Type-Options:
-  nosniff` and `Content-Disposition: attachment` for inline-dangerous types (`.html`,
-  `.svg`, `.xml`, `.js`).
-- **Graph referential integrity** — `#tags` are materialized as real graph nodes
-  (`node_type='tag'`) and linked node→node, so tag edges no longer corrupt the `edges` FK.
-- **Vision API** — switched to Gemma 3 (`google/gemma-3-4b-it`) processor-based
-  generation; PaliGemma and the `moondream2` `answer_question` pipeline remain as
-  fallback model paths. On by default; the model lazy-loads on first analysis.
-- **UTF-8-safe self-healing** — healing snippets are written as UTF-8 and the
-  `HealingRequest.timeout_s` API field is capped at 1–120 s.
+<details>
+<summary><b>Click to expand security details</b></summary>
+
+- **Self-healing RCE gate** — `heal()` refuses to run caller-supplied Python unless `--allow-unsafe-healing` is passed. `--healing` alone only enables diagnosis
+- **Sandboxed shell commands** — `/v1/terminal/exec` rejects `..` traversal, drive-absolute paths (`C:\`), UNC paths, and absolute `cd`. Sandboxed `shell=True` subprocesses stay confined to the project root
+- **Stored XSS** — `/generated` is served by `SafeStaticFiles`: `X-Content-Type-Options: nosniff` and `Content-Disposition: attachment` for inline-dangerous types (`.html`, `.svg`, `.xml`, `.js`)
+- **Graph referential integrity** — `#tags` are materialized as real graph nodes (`node_type='tag'`) and linked node→node, so tag edges no longer corrupt the `edges` FK
+- **Vision API** — Gemma 3 (`google/gemma-3-4b-it`) processor-based generation; PaliGemma + `moondream2` remain as fallback model paths. Lazy-loads on first analysis
+- **UTF-8-safe self-healing** — healing snippets are written as UTF-8 and `HealingRequest.timeout_s` is capped at 1–120 s
+
+</details>
 
 ---
 
 ## ⚠️ Limitations & liability
 
-This software is provided **"AS IS", without warranty of any kind** (see
-[LICENSE](LICENSE)). In addition:
+This software is provided **"AS IS", without warranty of any kind** (see [LICENSE](LICENSE)).
 
-- It is **experimental**. Model output can be wrong, unsafe, or biased; always verify
-  important results.
-- Optional features — vision, image generation, AutoML, and especially the **self-healing
-  agent** — execute model/code on your machine. The healing agent can run **arbitrary
-  Python**; only enable `--allow-unsafe-healing` on a trusted, local machine, never on a
-  host reachable from untrusted networks.
-- The authors are **not liable** for any damages, data loss, or harm arising from use,
-  misuse, or inability to use the software.
-- Performance depends entirely on your hardware; CPU-only inference is slow by design.
-
----
-
-## ©️ Copyright & license
-
-- **Copyright (c) 2025–2026 Rakibul Hasan (Rhasan_Indie_dev).**
-- Licensed under the **MIT License** — you may use, copy, modify, merge, publish,
-  distribute, sublicense, and/or sell copies, provided the copyright notice and permission
-  notice are included. See [LICENSE](LICENSE).
-- **Attribution:** keep the copyright/license notice in source distributions.
-- **Trademarks:** "Sovereign-Agentic-AI" is the project name; third-party model and tool
-  names (llama.cpp, moondream2, auto-sklearn, Next.js, etc.) belong to their owners.
-
----
-
-## ❓ FAQ
-
-**Q: Can I trust an indie dev's AI with my data?**
-A: The app is local-first — no telemetry, and nothing leaves your machine unless you
-explicitly enable a cloud fallback or web search. You can read the entire codebase; the
-808-test suite and public audit let you verify behaviour yourself.
-
-**Q: Is it free / can I use it commercially?**
-A: Yes. MIT licensed — free for personal and commercial use, with attribution.
-
-**Q: What if there are bugs?**
-A: 808 automated tests + a clean static audit cover the core; remaining non-critical
-items are listed transparently in `KNOWN_ISSUES.md`.
-
-**Q: Who is liable if the healing agent executes bad code?**
-A: The software is provided "AS IS" with no warranty (see Limitations & liability). Keep
-`--allow-unsafe-healing` off unless you are on a trusted local machine and understand the
-risk.
-
-**Q: How is this different from Ollama / LM Studio / LocalAI?**
-A: Multi-agent planning **and** judging, an adaptive per-task harness, a knowledge graph,
-and parallel multi-model execution — none of which those tools provide.
+- It is **experimental**. Model output can be wrong, unsafe, or biased; always verify important results
+- Optional features — vision, image generation, AutoML, and especially the **self-healing agent** — execute model/code on your machine. The healing agent can run **arbitrary Python**; only enable `--allow-unsafe-healing` on a trusted, local machine, never on a host reachable from untrusted networks
+- The authors are **not liable** for any damages, data loss, or harm arising from use, misuse, or inability to use the software
+- Performance depends entirely on your hardware; CPU-only inference is slow by design
 
 ---
 
@@ -426,18 +349,17 @@ python run_deep_audit.py     # mypy + pyflakes + bandit + vulture + pydocstyle +
 
 | Check | Result |
 |-------|--------|
-| GitHub Actions CI | Python tests + Next.js build on every push (badge above) |
+| GitHub Actions CI | Python tests + Next.js build on every push |
 | Unit tests | **808 / 808 passed** |
 | Pyflakes / Bandit / Vulture | clean |
 | TypeScript build | pass (13 routes) |
 | ESLint (frontend) | pass |
 
-Non-critical deferred items: [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md). Full audit:
-[`AUDIT_REPORT.md`](AUDIT_REPORT.md).
+Non-critical deferred items: [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) · Full audit: [`AUDIT_REPORT.md`](AUDIT_REPORT.md)
 
 ---
 
-## 💻 Hardware profile (reference build)
+## 💻 Hardware profile
 
 | Component | Spec | Usage |
 |-----------|------|-------|
@@ -454,12 +376,54 @@ Non-critical deferred items: [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md). Full audit:
 |---|---|---|---|---|
 | Multi-agent planning + judging | ✅ | ❌ | ❌ | ❌ |
 | Adaptive harness routing | ✅ | ❌ | ❌ | ❌ |
-| pgvector memory + graph | ✅ | ❌ | ❌ | ❌ |
+| pgvector memory + knowledge graph | ✅ | ❌ | ❌ | ❌ |
+| Workspaces + per-workspace knowledge | ✅ | ❌ | ❌ | ❌ |
 | Parallel multi-model + judge | ✅ | ❌ | ❌ | ❌ |
 | Self-healing (gated) | ✅ | ❌ | ❌ | ❌ |
-| AutoML (Linux) | ✅ | ❌ | ❌ | ❌ |
-| Hardware auto-tune + monitor | ✅ | manual | manual | manual |
+| AutoML (Linux, CPU) | ✅ | ❌ | ❌ | ❌ |
+| Hardware auto-tune + live monitor | ✅ | manual | manual | manual |
 | Vision + image-gen + LoRA (CPU) | ✅ | partial | partial | partial |
+| OpenAI-compatible API + MCP | ✅ | partial | partial | partial |
+| GBNF auto-approved workflow | ✅ | ❌ | ❌ | ❌ |
+
+---
+
+## ❓ FAQ
+
+<details>
+<summary><b>Can I trust an indie dev's AI with my data?</b></summary>
+
+The app is local-first — no telemetry, and nothing leaves your machine unless you explicitly enable a cloud fallback or web search. You can read the entire codebase; the 808-test suite and public audit let you verify behaviour yourself.
+
+</details>
+
+<details>
+<summary><b>Is it free / can I use it commercially?</b></summary>
+
+Yes. MIT licensed — free for personal and commercial use, with attribution.
+
+</details>
+
+<details>
+<summary><b>What if there are bugs?</b></summary>
+
+808 automated tests + a clean static audit cover the core; remaining non-critical items are listed transparently in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
+
+</details>
+
+<details>
+<summary><b>Who is liable if the healing agent executes bad code?</b></summary>
+
+The software is provided "AS IS" with no warranty (see Limitations & liability). Keep `--allow-unsafe-healing` off unless you are on a trusted local machine and understand the risk.
+
+</details>
+
+<details>
+<summary><b>How is this different from Ollama / LM Studio / LocalAI?</b></summary>
+
+Multi-agent planning **and** judging, an adaptive per-task harness, a knowledge graph, and parallel multi-model execution — none of which those tools provide.
+
+</details>
 
 ---
 
@@ -469,4 +433,6 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-<p align="center"><sub>Built by <a href="https://rhasan-dev-bd-com.vercel.app/">Rakibul Hasan</a> (Rhasan_Indie_dev). Local. Fast. Private.</sub></p>
+<p align="center">
+  <sub>Built by <a href="https://rhasan-dev-bd-com.vercel.app/">Rakibul Hasan</a> (Rhasan_Indie_dev) · Local · Fast · Private</sub>
+</p>
