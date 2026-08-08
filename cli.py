@@ -735,6 +735,9 @@ def _parse_record(raw: bytes):
 
 
 def _word_bounds(buf: list, idx: int):
+    if not buf:
+        return 0, 0
+    idx = max(0, min(idx, len(buf) - 1))
     a = idx
     while a > 0 and not buf[a - 1].isspace():
         a -= 1
