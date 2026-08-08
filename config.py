@@ -1,7 +1,6 @@
 import os
 import multiprocessing
 import logging
-import hmac
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
@@ -81,9 +80,6 @@ class AppConfig:
     debug: bool = False
     threads: int = 0
     gpu_name: str = ""
-    api_token: str = ""
-    api_tokens: Tuple[str, ...] = ()
-    admin_key: str = ""
     parallel_enabled: bool = False
     parallel_max: int = 2
     parallel_judge: bool = True
@@ -198,16 +194,6 @@ class AppConfig:
                 m.n_ubatch = 512
         if not self.gpu_name:
             self.gpu_name = os.environ.get("LLM_GPU_NAME", "GPU")
-        if os.environ.get("API_TOKEN"):
-            self.set_api_token(os.environ["API_TOKEN"])
-        _extra_tokens = os.environ.get("LLM_API_TOKENS", "").strip()
-        if _extra_tokens:
-            extras = [p.strip() for p in _extra_tokens.split(",") if p.strip()]
-            merged = list(self.api_tokens)
-            for e in extras:
-                if e and e != self.api_token and e not in merged:
-                    merged.append(e)
-            self.api_tokens = tuple(merged)
         if os.environ.get("LLM_PARALLEL", "").strip().lower() in ("0", "false", "off", "no"):
             self.parallel_enabled = False
         if os.environ.get("LLM_PARALLEL_MAX", "").strip().isdigit():
@@ -295,8 +281,6 @@ class AppConfig:
             self.computer["allow_unsafe"] = True
         if os.environ.get("LLM_ALLOW_GUI", "").strip().lower() in ("1", "true", "yes", "on"):
             self.computer["allow_gui"] = True
-        if os.environ.get("LLM_ADMIN_KEY", "").strip():
-            self.admin_key = os.environ["LLM_ADMIN_KEY"].strip()
         if os.environ.get("LLM_RATE_LIMIT", "").strip().lower() in ("1", "true", "yes", "on"):
             self.rate_limit["enabled"] = True
         if os.environ.get("LLM_RATE_LIGHT", "").strip().isdigit():
@@ -324,38 +308,6 @@ class AppConfig:
         """Propagate CONFIG.threads to every model's n_threads."""
         for m in self.models:
             m.n_threads = self.threads
-
-    def set_api_token(self, value: str):
-        """Set the primary API token, staging any comma-separated extras as rotation tokens."""
-        parts = [p.strip() for p in value.split(",") if p.strip()]
-        self.api_token = parts[0] if parts else ""
-        self.api_tokens = tuple(parts[1:])
-
-    def valid_api_tokens(self) -> frozenset:
-        """All tokens currently accepted for API auth (primary + rotation set)."""
-        toks = set(self.api_tokens)
-        if self.api_token:
-            toks.add(self.api_token)
-        return frozenset(toks)
-
-    def token_authorized(self, presented: str) -> bool:
-        """Constant-time check that `presented` matches any configured API token."""
-        if not presented:
-            return False
-        if self.api_token and hmac.compare_digest(presented, self.api_token):
-            return True
-        return any(hmac.compare_digest(presented, t) for t in self.api_tokens)
-
-    def admin_authorized(self, presented: str) -> bool:
-        """Constant-time check that `presented` matches the admin key.
-
-        Returns True when the presented value matches the configured admin key.
-        When no admin key is configured, returns False (the caller decides
-        whether to fall back to the normal API token path).
-        """
-        if not presented or not self.admin_key:
-            return False
-        return hmac.compare_digest(presented, self.admin_key)
 
     def _discovered_models(self) -> List[ModelConfig]:
         """Register any .gguf dropped into models/ that is not already configured."""

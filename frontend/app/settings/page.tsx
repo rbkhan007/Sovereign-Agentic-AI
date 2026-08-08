@@ -41,8 +41,6 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [apiKey, setApiKey] = useState('');
-  const [showAdminKey, setShowAdminKey] = useState(false);
-  const [adminKey, setAdminKey] = useState('');
   const { addToast } = useToast();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -329,29 +327,8 @@ export default function SettingsPage() {
       </Section>
 
       {/* Security Section */}
-      <Section title="Security" icon={<Shield size={20} />} description="Admin key and per-IP rate limiting">
+      <Section title="Security" icon={<Shield size={20} />} description="Per-IP rate limiting">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Admin Key" hint="Required via X-Admin-Key for control-plane mutations (config, model load, agent/skill/LoRA writes)">
-            <div className="relative">
-              <Input
-                type={showAdminKey ? 'text' : 'password'}
-                value={adminKey}
-                onChange={e => setAdminKey(e.target.value)}
-                placeholder={String(config.admin_key ? 'Already set at startup' : 'Set at startup via run.py --admin-key or LLM_ADMIN_KEY')}
-                className="pr-10"
-                disabled={Boolean(config.admin_key)}
-              />
-              {!config.admin_key && (
-                <button
-                  type="button"
-                  onClick={() => setShowAdminKey(!showAdminKey)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary transition-colors"
-                >
-                  {showAdminKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              )}
-            </div>
-          </Field>
           <Field label="Rate Limit (light/min)">
             <Input type="number" min="1" value={String((config.rate_limit as Record<string, unknown> | undefined)?.light_per_min ?? 120)} onChange={e => updateDebounced('rate_limit.light_per_min', parseInt(e.target.value))} />
           </Field>

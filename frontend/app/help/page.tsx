@@ -163,8 +163,7 @@ python run.py --db
 # Custom connection
 python run.py --db --db-name rhasan_indie_agentic_llm --db-user llm_user --db-password your_secure_password
 
-# With API token
-python run.py --db --db-password postgres --api-token my-secret-token`}</CodeBlock>
+python run.py --db --db-password postgres`}</CodeBlock>
           </div>
 
           <div>

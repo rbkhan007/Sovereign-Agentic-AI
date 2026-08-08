@@ -19,7 +19,6 @@ Flags:
     --chat-count N     Number of chat requests (default 3)
     --timeout S        Per-request timeout in seconds (default 30)
     --error-limit P    Fail when error rate % exceeds P (default 5.0)
-    --token T          Bearer token for --api-token protected servers (env TEST_LOAD_TOKEN)
     --quiet            Less verbose output
 """
 import argparse, json, os, random, sys, threading, time, urllib.request, urllib.error
@@ -39,14 +38,11 @@ CHEAP_ENDPOINTS = [
 
 _results_lock = threading.Lock()
 _results: dict = {}
-_AUTH_TOKEN = ""  # nosec B105
 
 
 def _request(base, method, path, body=None, timeout=30):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(base + path, data=data, method=method)
-    if _AUTH_TOKEN:
-        req.add_header("Authorization", f"Bearer {_AUTH_TOKEN}")
     if body is not None:
         req.add_header("Content-Type", "application/json")
     start = time.time()
@@ -117,13 +113,10 @@ def main():
     ap.add_argument("--chat-count", type=int, default=3)
     ap.add_argument("--timeout", type=float, default=30.0)
     ap.add_argument("--error-limit", type=float, default=5.0)
-    ap.add_argument("--token", default=None, help="Bearer token for --api-token servers")
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--health-check", action="store_true", help="Single health check then exit")
     args = ap.parse_args()
 
-    global _AUTH_TOKEN  # noqa: PLC0603
-    _AUTH_TOKEN = args.token or os.environ.get("TEST_LOAD_TOKEN", "")
     base = args.url or f"http://127.0.0.1:{args.port}"
     name = "load test"
 

@@ -223,34 +223,6 @@ loadModels();
 FALLBACK_PAGE = FALLBACK_PAGE.replace("__ASCII_ART__", html.escape(_ASCII_ART_TEXT))
 
 
-def _is_loopback(request: Request) -> bool:
-    # Starlette's TestClient reports host "testclient", which simulates localhost.
-    host = (request.client.host if request.client else "") or ""
-    return host in ("127.0.0.1", "::1", "localhost", "testclient")
-
-
-def _auth_bootstrap(loopback: bool = True) -> str:
-    token = getattr(CONFIG, "api_token", "") or ""
-    admin_key = getattr(CONFIG, "admin_key", "") or ""
-    if not token and not admin_key:
-        return ""
-    # Only embed the API token for loopback clients. Embedding it in HTML served
-    # on a non-loopback bind would hand the token to anyone who can reach the
-    # port, defeating --api-token. Remote/LAN clients must authenticate out of band.
-    if not loopback:
-        logger.warning("API token/admin key set but client is non-loopback; token withheld from HTML")
-        return ""
-    token_js = json.dumps(token).replace("<", "\\u003c").replace(">", "\\u003e")
-    admin_js = json.dumps(admin_key).replace("<", "\\u003c").replace(">", "\\u003e")
-    return (
-        "<script>window.API_TOKEN=" + token_js + ";window.ADMIN_KEY=" + admin_js +
-        ";if(window.API_TOKEN||window.ADMIN_KEY){var _f=window.fetch;window.fetch=function(u,o){o=o||{};"
-        "o.headers=o.headers||{};if(typeof u==='string'&&(u.indexOf('/v1/')===0||u.indexOf('/mcp')===0))"
-        "{if(window.API_TOKEN){o.headers['Authorization']='Bearer '+window.API_TOKEN;}"
-        "if(window.ADMIN_KEY){o.headers['X-Admin-Key']=window.ADMIN_KEY;}}return _f.call(this,u,o);};}</script>"
-    )
-
-
 def _get_next_html_path(path: str) -> str:
     """Map URL path to Next.js static export HTML file."""
     # Normalize path
@@ -287,8 +259,8 @@ def _get_next_html_path(path: str) -> str:
     return os.path.join(NEXT_BUILD_DIR, "server", "app", "index.html")
 
 
-def _read_next_html(path: str, loopback: bool = True) -> tuple:
-    """Read Next.js HTML file from build output and inject auth bootstrap."""
+def _read_next_html(path: str) -> tuple:
+    """Read Next.js HTML file from build output."""
     html_path = _get_next_html_path(path)
     try:
         mtime = os.path.getmtime(html_path)
@@ -297,7 +269,7 @@ def _read_next_html(path: str, loopback: bool = True) -> tuple:
         return None, None
 
     with _CACHE_LOCK:
-        cache_key = (mtime, size, path, loopback, getattr(CONFIG, "api_token", "") or "")
+        cache_key = (mtime, size, path)
         if _CACHE.get("cache_key") == cache_key and _CACHE.get("html") is not None:
             return _CACHE["html"], _CACHE["etag"]
 
@@ -308,13 +280,6 @@ def _read_next_html(path: str, loopback: bool = True) -> tuple:
             return None, None
 
         html = data.decode("utf-8", errors="replace")
-        # Inject auth bootstrap before </head> or at the start of <body>
-        auth_script = _auth_bootstrap(loopback)
-        if auth_script and '</head>' in html:
-            html = html.replace('</head>', auth_script + '</head>', 1)
-        elif auth_script and '<body>' in html:
-            html = html.replace('<body>', '<body>' + auth_script, 1)
-
         etag = '"' + hashlib.md5(html.encode("utf-8"), usedforsecurity=False).hexdigest() + '"'
         _CACHE.update(cache_key=cache_key, mtime=mtime, size=size, html=html, etag=etag)  # type: ignore
         return html, etag
@@ -418,7 +383,6 @@ def create_web_app(api_app: FastAPI) -> FastAPI:
 
     @api_app.get("/chat", include_in_schema=False)
     @api_app.get("/", include_in_schema=False)
-    @api_app.get("/login", include_in_schema=False)
     @api_app.get("/workspace", include_in_schema=False)
     @api_app.get("/database", include_in_schema=False)
     @api_app.get("/models", include_in_schema=False)
@@ -430,26 +394,17 @@ def create_web_app(api_app: FastAPI) -> FastAPI:
     @api_app.get("/dashboard", include_in_schema=False)
     @api_app.get("/help", include_in_schema=False)
     async def web_ui(request: Request):
-        # HTML shells carry no data: auth is enforced on the /v1/* and /mcp
-        # API routes. The auth bootstrap injects the token into the browser so
-        # client-side fetch() calls are authenticated automatically. For
-        # non-loopback clients the token is withheld (see _auth_bootstrap).
-        loopback = _is_loopback(request)
+        # HTML shells carry no data.
         if _NEXT_MOUNTED and os.path.isdir(os.path.join(NEXT_BUILD_DIR, "server", "app")):
-            html, etag = _read_next_html(request.url.path, loopback)
+            html, etag = _read_next_html(request.url.path)
             if html is None:
-                html, etag = _read_next_html("/", loopback)
+                html, etag = _read_next_html("/")
         else:
             html, etag = None, None
 
         if html is None:
             html = FALLBACK_PAGE
             etag = '"' + hashlib.md5(html.encode("utf-8"), usedforsecurity=False).hexdigest() + '"'
-            auth_script = _auth_bootstrap(loopback)
-            if auth_script and '</head>' in html:
-                html = html.replace('</head>', auth_script + '</head>', 1)
-            elif auth_script and '<body>' in html:
-                html = html.replace('<body>', '<body>' + auth_script, 1)
 
         if etag:
             if request.headers.get("if-none-match") == etag:

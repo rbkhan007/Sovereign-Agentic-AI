@@ -12,8 +12,6 @@ python test_system.py [port]     # Live integration tests (requires running serv
 python run_deep_audit.py         # Full static audit: mypy + pyflakes + bandit + vulture + pydocstyle + ESLint
 python run.py --port 8080        # Custom port
 python run.py --threads 4        # Override CPU threads (propagated to models)
-python run.py --api-token secret # Require Bearer token on /v1/* and /mcp (comma-separated = rotation set, first is primary; env API_TOKEN / LLM_API_TOKENS)
-python run.py --admin-key secret # Require X-Admin-Key header for control-plane mutations (POST /v1/config, model load/unload, agents/skills/loras writes, harness reset/adjust, memory clear/prune, workspace/graph writes; env LLM_ADMIN_KEY)
 python run.py --rate-limit         # Enable per-IP rate limiting on /v1/* and /mcp (light 120/min, heavy 10/min; env LLM_RATE_LIMIT=on)
 python run.py --rate-light 300 --rate-heavy 20  # Tune rate-limit buckets per IP per minute (env LLM_RATE_LIGHT / LLM_RATE_HEAVY)
 python run.py --no-rate-exempt-local            # Do NOT exempt 127.0.0.1/::1 from rate limits (env LLM_RATE_EXEMPT_LOCAL=off)
@@ -130,7 +128,7 @@ GET  /v1/models/installed        # List .gguf files on disk with sizes
 POST /v1/models/pull             # Download model from URL with SSE progress (percent, downloaded_mb, total_mb)
 POST /v1/chat/auto-stream/workflow # GBNF-constrained auto-approved workflow (plan → execute → judge → memory)
 POST /v1/agent/auto              # Alias for auto-approved agent workflow (SSE)
-GET  /v1/config                  # Get config (incl. models[], db.host/port/user, api_token)
+GET  /v1/config                  # Get config (incl. models[], db.host/port/user)
 POST /v1/config                  # Update config (threads, prune.*, vram.*, harness.*, gen.timeout_s, cloud.provider, image_gen.enabled, vision.enabled/model/max_tokens; dynamic model.<name>.temperature/max_tokens/n_ctx/top_p/role)
 GET  /v1/health                  # Health check
 GET  /mcp                        # MCP tool discovery (browser/admin UIs list available tools)
@@ -279,13 +277,12 @@ test_load.py        # Load/balance stress tool (cheap endpoints + real chat gene
 - **Port safety**: `run.py` auto-switches to a free common port when the requested one is busy (`--force-port` opt-in to kill the occupying process)
 - **GGUF discovery**: any `.gguf` dropped into `models/` is auto-registered as an Executor (visible in `/v1/models` and the UI); `--add-model PATH` registers a file from anywhere
 - **Cloud presets**: OpenAI, Claude (Anthropic), Groq, OpenRouter, Gemini with auto-detection of `ANTHROPIC_API_KEY` env var
-- **API token rotation**: `CONFIG.set_api_token()` (run.py `--api-token`, env `API_TOKEN`, or `POST /v1/config` key `api_token`) accepts a comma-separated rotation set — first token is primary, rest staged as extras; `CONFIG.token_authorized()` validates any token in the set with constant-time compares, so operators can pre-stage a new key and cut over without breaking in-flight clients (`GET /v1/config` reports `api_token_count`)
 - **OpenAI fallback rate limiting**: sliding-window limiter (`openai.rate_limit_per_min`, default 10 calls/min, `POST /v1/config`) + exponential backoff (`openai.backoff_max_s`, default 60) so cloud fallback never hammers the API; shared across `models.generate`/`chat` and `orchestrator._call_openai`
 - **MCP**: `GET /mcp` serves tool discovery for browser/admin UIs; `POST /mcp` handles JSON-RPC `tools/call` and `tools/list`; `_build_mcp_tools()` extracted to eliminate duplication; skill params have individual schema entries with descriptions; CLI `/mcp` lists tools and `/mcp call <tool> <input>` invokes them
 - **CLI Harness**: `/harness` shows per-task/model scores table; `/harness reset` resets scores; `/harness adjust <task> <model> <score>` manually adjusts; `/harness export`/`/harness import` for persistence
 - **CLI command whitelist**: `CONFIG.cli_command_whitelist` (run.py `--cli-commands`, env `LLM_CLI_COMMANDS`, comma-separated) restricts which slash commands the CLI executes — anything unlisted prints `Blocked: ...`; `/help /? /exit /quit /status` are always allowed; tab-completion (`_visible_commands`) only offers permitted commands
 - **Frontend Theme**: CSS variable-based light/dark theme with `MutationObserver`-driven chart hooks; `@tailwindcss/typography` for prose/markdown; glassmorphism cards with hover-lift; `suppressHydrationWarning` + inline FOUC prevention script; `ErrorBoundary` wraps page content; reduced-motion support; badge variants (success/danger); scrollbar polish; light theme input/button polish
-- **Frontend Streaming**: proper `data:` frame SSE parsing with auth token; markdown rendering with `react-markdown` + `react-syntax-highlighter` + copy button; auto-resize textarea
+- **Frontend Streaming**: proper `data:` frame SSE parsing; markdown rendering with `react-markdown` + `react-syntax-highlighter` + copy button; auto-resize textarea
 - **Frontend Accessibility**: `aria-expanded` on collapsible sections; `aria-label` attributes; label-input linking; focus-visible outlines
 - **Multipage WebUI**: `/` is a landing page (hero, architecture flow, hardware-optimized model cards, Hugging Face download guide, datasets, live system pulse), `/dashboard` is the live metrics dashboard, and `/terminal` is the Agentic Terminal (IDE workspace + full CLI setup guide); the ASCII logo is served as a PNG (`/static/ascii-logo.png`, legacy `/ascii-logo.png` redirects) and a hand-drawn custom SVG icon set (`components/icons.tsx`) replaces stock icons on the landing + sidebar; fluid `clamp()` typography, staggered entrance animations, glass hover glow, focus rings and `::selection` polish; brand renamed to "Sovereign AI" in the sidebar
 

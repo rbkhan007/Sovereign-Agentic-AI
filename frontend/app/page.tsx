@@ -22,7 +22,7 @@ const SOFTWARE: { icon: React.ReactNode; title: string; desc: string }[] = [
   { icon: <ArtForgeIcon size={18} />, title: 'Image Generation', desc: 'On-device Stable Diffusion image synthesis, RAM-guarded and resolution-capped.' },
   { icon: <ReactLoopIcon size={18} />, title: 'Computer Agent', desc: 'ReAct shell, file I/O, web and process tools â€” sandboxed by default, with a dangerous-command guard.' },
   { icon: <MemoryMatrixIcon size={18} />, title: 'Memory & Vector Store', desc: 'PostgreSQL + pgvector persistence with auto-pruning, sessions and per-workspace memory scopes.' },
-  { icon: <SandboxShieldIcon size={18} />, title: 'Security & Sandbox', desc: 'Dangerous-pattern blocking, path-traversal-safe file ops, API tokens and rate limiting on every endpoint.' },
+  { icon: <SandboxShieldIcon size={18} />, title: 'Security & Sandbox', desc: 'Dangerous-pattern blocking, path-traversal-safe file ops, and rate limiting on every endpoint.' },
   { icon: <CloudBridgeIcon size={18} />, title: 'Cloud Fallback', desc: 'Optional OpenAI-compatible fallback with sliding-window rate limiting when local models are unavailable.' },
 ];
 

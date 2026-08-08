@@ -92,28 +92,12 @@ try:
     check("env override prune hours", fresh.prune_interval_hours == 3)
     check("env override prune days", fresh.prune_max_age_days == 10)
     check("env override gen timeout", fresh.gen_timeout_s == 75.0, f"({fresh.gen_timeout_s})")
-    check("env override api tokens", fresh.api_tokens == ("rot1", "rot2"), f"({fresh.api_tokens})")
     check("env auto-stream disabled", fresh.auto_stream_enabled is False and fresh.auto_stream_thinking is False)
     check("env auto-stream tokens clamped", fresh.auto_stream_min_tokens == 25 and fresh.auto_stream_max_tokens == 512,
           f"({fresh.auto_stream_min_tokens},{fresh.auto_stream_max_tokens})")
 finally:
     os.environ.clear()
     os.environ.update(old_env)
-
-_old_toks = (CONFIG.api_token, CONFIG.api_tokens)
-try:
-    CONFIG.set_api_token("one,two,three")  # nosec B105
-    check("set_api_token splits", CONFIG.api_token == "one" and CONFIG.api_tokens == ("two", "three"),  # nosec B105
-          f"({CONFIG.api_token},{CONFIG.api_tokens})")
-    check("valid_api_tokens all", CONFIG.valid_api_tokens() == frozenset({"one", "two", "three"}))
-    check("token_authorized accepts all", all(CONFIG.token_authorized(t) for t in ("one", "two", "three")))
-    check("token_authorized rejects unknown", not CONFIG.token_authorized("nope") and not CONFIG.token_authorized(""))
-    CONFIG.set_api_token("single")  # nosec B105
-    check("set_api_token single", CONFIG.api_token == "single" and CONFIG.api_tokens == (),  # nosec B105
-          f"({CONFIG.api_token})")
-    check("valid_api_tokens single", CONFIG.valid_api_tokens() == frozenset({"single"}))
-finally:
-    CONFIG.api_token, CONFIG.api_tokens = _old_toks
 
 import config as config_mod
 _tmp_models = tempfile.mkdtemp(prefix="models_disc_")
@@ -1437,7 +1421,6 @@ api_mod.app = create_web_app(api_mod.app)
 
 CONFIG.db.enabled = False
 CONFIG.openai.enabled = False
-CONFIG.api_token = ""  # nosec B105
 CONFIG.parallel_enabled = True
 CONFIG.parallel_max = 2
 CONFIG.parallel_judge = True
@@ -1725,8 +1708,8 @@ with mock.patch.object(api_mod.model_manager, "generate", side_effect=fake_gener
 
     r = client.get("/v1/config")
     j = r.json()
-    check("config has models + db + token",
-          "models" in j and j["db"].get("host") == "localhost" and "api_token" in j and j["api_token"] is False)
+    check("config has models + db",
+          "models" in j and j["db"].get("host") == "localhost")
 
     r = client.post("/v1/chat/completions", json={
         "messages": [{"role": "user", "content": "first question"}],
@@ -1753,39 +1736,6 @@ with mock.patch.object(api_mod.model_manager, "generate", side_effect=fake_gener
         "temperature": 0.4, "max_tokens": 55})
     check("stream passes temperature/max_tokens", r.status_code == 200 and _gen_rec["stream_kwargs"] == {"max_tokens": 55, "temperature": 0.4},
           f"[{_gen_rec['stream_kwargs']}]")
-
-    CONFIG.api_token = "test-token"  # nosec B105
-    try:
-        r = client.get("/v1/models")
-        check("auth blocks", r.status_code == 401)
-        r = client.get("/v1/models", headers={"Authorization": "Bearer test-token"})
-        check("auth allows", r.status_code == 200)
-    finally:
-        CONFIG.api_token = ""  # nosec B105
-
-    CONFIG.api_token = "primary-token"  # nosec B105
-    CONFIG.api_tokens = ("rotation-token",)
-    try:
-        r = client.get("/v1/models", headers={"Authorization": "Bearer rotation-token"})
-        check("auth allows rotation token", r.status_code == 200)
-        r = client.get("/v1/models", headers={"Authorization": "Bearer primary-token"})
-        check("auth allows primary token", r.status_code == 200)
-        r = client.get("/v1/models", headers={"Authorization": "Bearer bogus"})
-        check("auth blocks unknown with rotation", r.status_code == 401)
-        r = client.post("/v1/config", json={"key": "api_token", "value": "new-token,primary-token"},  # nosec B105
-                        headers={"Authorization": "Bearer primary-token"})  # nosec B105
-        check("config rotate token keeps old", r.status_code == 200 and CONFIG.api_token == "new-token"  # nosec B105
-              and CONFIG.api_tokens == ("primary-token",), f"({r.status_code})")
-        r = client.get("/v1/models", headers={"Authorization": "Bearer new-token"})
-        check("auth allows rotated token", r.status_code == 200)
-        r = client.get("/v1/models", headers={"Authorization": "Bearer primary-token"})
-        check("auth allows kept old token", r.status_code == 200)
-        j = client.get("/v1/config", headers={"Authorization": "Bearer new-token"}).json()
-        check("config reports token count", j.get("api_token") is True and j.get("api_token_count") == 2,
-              f"({j.get('api_token')},{j.get('api_token_count')})")
-    finally:
-        CONFIG.api_token = ""  # nosec B105
-        CONFIG.api_tokens = ()
 
     try:
         r = client.get("/v1/workspaces")
@@ -2112,29 +2062,6 @@ if etag:
 r = client.get("/chat")
 check("GET /chat serves UI", r.status_code == 200 and "Sovereign-Agentic-AI" in r.text)
 
-CONFIG.api_token = "sekret"  # nosec B105
-try:
-    r = client.get("/", headers={"Authorization": "Bearer sekret"})
-    check("token bootstrap injected", "Bearer" in r.text and "sekret" in r.text)
-finally:
-    CONFIG.api_token = ""  # nosec B105
-
-CONFIG.api_token = "x</script>y"  # nosec B105
-try:
-    r = client.get("/", headers={"Authorization": "Bearer x</script>y"})
-    check("token bootstrap escapes script tag", "x\\u003c/script\\u003ey" in r.text)
-finally:
-    CONFIG.api_token = ""  # nosec B105
-
-# Non-loopback clients must NOT receive the API token in HTML (loopback gate).
-CONFIG.api_token = "noremote"  # nosec B105
-try:
-    with mock.patch("web_ui._is_loopback", return_value=False):
-        r = client.get("/")
-    check("token withheld for non-loopback", "window.API_TOKEN" not in r.text)
-finally:
-    CONFIG.api_token = ""  # nosec B105
-
 q_events = queue.Queue()
 seen = []
 stop = threading.Event()
@@ -2188,31 +2115,15 @@ if _etag_saved:
     r3 = client3.get("/", headers={"If-None-Match": '"bogus-etag"'})
     check("GET / bogus etag 200", r3.status_code == 200)
 
-CONFIG.api_token = "web-test"  # nosec B105
-try:
-    r = client3.get("/", headers={"Authorization": "Bearer web-test"})
-    check("web UI auth bootstrap", "Bearer" in r.text and "web-test" in r.text)
-    check("web UI token JSON-encoded", "window.API_TOKEN" in r.text and '="web-test"' in r.text)
-finally:
-    CONFIG.api_token = ""  # nosec B105
+    with mock.patch("web_ui._read_next_html") as mock_read:
+        mock_read.return_value = ("<html><head></head><body>next</body></html>", '"abc123"')
+        r = client3.get("/")
+        check("nextjs HTML served", r.status_code == 200 and "next" in r.text)
+        check("nextjs etag set", r.headers.get("etag") == '"abc123"')
 
-with mock.patch("web_ui._read_next_html") as mock_read:
-    mock_read.return_value = ("<html><head></head><body>next</body></html>", '"abc123"')
-    r = client3.get("/")
-    check("nextjs HTML served", r.status_code == 200 and "next" in r.text)
-    check("nextjs etag set", r.headers.get("etag") == '"abc123"')
-
-with mock.patch("web_ui._read_next_html", return_value=("<html></html>", None)):
-    r = client3.get("/")
-    check("nextjs no etag", r.status_code == 200 and r.headers.get("etag") is None)
-
-CONFIG.api_token = "<script>alert(1)</script>"  # nosec B105
-try:
-    r = client3.get("/", headers={"Authorization": "Bearer <script>alert(1)</script>"})
-    api_idx = r.text.find("window.API_TOKEN")
-    check("web UI XSS escaped", api_idx == -1 or "<script>alert(1)</script>" not in (r.text[api_idx:api_idx+200] if api_idx >= 0 else ""))
-finally:
-    CONFIG.api_token = ""  # nosec B105
+    with mock.patch("web_ui._read_next_html", return_value=("<html></html>", None)):
+        r = client3.get("/")
+        check("nextjs no etag", r.status_code == 200 and r.headers.get("etag") is None)
 
 r = client3.get("/generated/")
 check("GET /generated dir listing 404", r.status_code in (404, 405))
@@ -2427,10 +2338,8 @@ saved = (CONFIG.parallel_enabled, CONFIG.parallel_max, CONFIG.prune_interval_hou
          CONFIG.auto_tune, CONFIG.auto_load, CONFIG.cloud_provider,
          CONFIG.openai.base_url, CONFIG.openai.chat_model, CONFIG.gen_timeout_s,
          CONFIG.parallel_load, CONFIG.load_workers, CONFIG.cli_command_whitelist,
-         CONFIG.api_token, CONFIG.api_tokens,
          CONFIG.auto_stream_enabled, CONFIG.auto_stream_thinking,
          CONFIG.auto_stream_min_tokens, CONFIG.auto_stream_max_tokens)
-_run_api_token = "one,two"  # nosec B105
 try:
     with mock.patch.object(sys, "argv", ["run.py", "api", "--no-parallel", "--parallel-max", "3",
                                          "--prune-hours", "2", "--prune-days", "45", "--sandbox",
@@ -2438,7 +2347,6 @@ try:
                                          "--no-auto-load", "--no-open", "--threads", "2",
                                          "--gen-timeout", "120", "--no-parallel-load",
                                          "--load-workers", "3", "--cli-commands", "status,model,lora",
-                                         "--api-token", _run_api_token,
                                          "--no-auto-stream", "--no-auto-stream-thinking",
                                          "--auto-stream-min-tokens", "25",
                                          "--auto-stream-max-tokens", "512"]), \
@@ -2461,8 +2369,6 @@ try:
     check("run.py --load-workers", CONFIG.load_workers == 3)
     check("run.py --cli-commands", CONFIG.cli_command_whitelist == ("status", "model", "lora"),
           f"({CONFIG.cli_command_whitelist})")
-    check("run.py --api-token rotation", CONFIG.api_token == "one" and CONFIG.api_tokens == ("two",),  # nosec B105
-          f"({CONFIG.api_token},{CONFIG.api_tokens})")
     check("run.py --no-auto-stream", CONFIG.auto_stream_enabled is False)
     check("run.py --no-auto-stream-thinking", CONFIG.auto_stream_thinking is False)
     check("run.py --auto-stream-min-tokens clamped", CONFIG.auto_stream_min_tokens == 25)
@@ -2475,7 +2381,6 @@ finally:
      CONFIG.auto_tune, CONFIG.auto_load, CONFIG.cloud_provider,
      CONFIG.openai.base_url, CONFIG.openai.chat_model, CONFIG.gen_timeout_s,
      CONFIG.parallel_load, CONFIG.load_workers, CONFIG.cli_command_whitelist,
-     CONFIG.api_token, CONFIG.api_tokens,
      CONFIG.auto_stream_enabled, CONFIG.auto_stream_thinking,
      CONFIG.auto_stream_min_tokens, CONFIG.auto_stream_max_tokens) = saved
     CONFIG.sync_threads()

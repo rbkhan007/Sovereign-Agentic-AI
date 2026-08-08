@@ -39,8 +39,7 @@ python run.py cli --no-auto-load   # instant boot, skip VRAM preload
 # 3. API server only (power the page over HTTP)
 python run.py api
 
-# 4. Secure it (optional but recommended)
-python run.py --api-token secret --admin-key secret
+# 4. Harden it (optional)
 python run.py --sandbox           # force read-only: no DB writes`;
 
 const HF_DOWNLOAD = `pip install "huggingface_hub[cli]"
@@ -132,12 +131,6 @@ const API_ENDPOINTS: ApiEndpoint[] = [
 
 const SECURITY_FLAGS = `# Enforce read-only: no DB writes, isolated conversations
 python run.py --sandbox
-
-# Require a Bearer token on /v1/* and /mcp
-python run.py --api-token secret
-
-# Require X-Admin-Key for control-plane mutations (config, load/unload)
-python run.py --admin-key secret
 
 # Optional hardening
 python run.py --no-rate-exempt-local   # rate-limit even 127.0.0.1

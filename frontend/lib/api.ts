@@ -9,22 +9,12 @@ export function getApiBase(): string {
   return process.env.NEXT_PUBLIC_API_BASE || '';
 }
 
-import { loadAuth } from '@/lib/auth';
-
 export async function api(path: string, options: RequestInit = {}, timeout = 60000, signal?: AbortSignal): Promise<Response> {
   const base = getApiBase();
   const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
   
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
-  
-  let token = '';
-  let adminKey = '';
-  if (typeof window !== 'undefined') {
-    const auth = loadAuth();
-    token = auth.apiToken || (window as unknown as Record<string, string | undefined>).API_TOKEN || '';
-    adminKey = auth.adminKey || (window as unknown as Record<string, string | undefined>).ADMIN_KEY || '';
-  }
   
   if (signal) {
     const onAbort = () => controller.abort();
@@ -36,16 +26,10 @@ export async function api(path: string, options: RequestInit = {}, timeout = 600
       ...options,
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(adminKey ? { 'X-Admin-Key': adminKey } : {}),
         ...options.headers,
       },
       signal: controller.signal,
     });
-    
-    if (res.status === 401 && typeof window !== 'undefined') {
-      delete (window as unknown as Record<string, string | undefined>).API_TOKEN;
-    }
     
     return res;
   } finally {
@@ -335,19 +319,8 @@ export interface GraphNode {
 export async function uploadChatFile(file: File): Promise<{ url: string; name: string; preview_text?: string | null }> {
   const formData = new FormData();
   formData.append('file', file);
-  let token = '';
-  let adminKey = '';
-  if (typeof window !== 'undefined') {
-    const auth = loadAuth();
-    token = auth.apiToken || (window as unknown as Record<string, string | undefined>).API_TOKEN || '';
-    adminKey = auth.adminKey || (window as unknown as Record<string, string | undefined>).ADMIN_KEY || '';
-  }
   const res = await fetch(`${getApiBase()}/v1/chat/upload`, {
     method: 'POST',
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(adminKey ? { 'X-Admin-Key': adminKey } : {}),
-    },
     body: formData,
   });
   if (!res.ok) {

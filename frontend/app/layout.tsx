@@ -6,8 +6,6 @@ import { SidebarProvider } from '@/components/SidebarProvider';
 import Sidebar from '@/components/layout/Sidebar';
 import SystemStatusBar from '@/components/layout/SystemStatusBar';
 import OfflineBanner from '@/components/OfflineBanner';
-import { AuthProvider } from '@/components/auth/AuthProvider';
-import RouteGuard from '@/components/auth/ProtectedRoute';
 import PageTransition from '@/components/PageTransition';
 import { ThemeProvider } from '@/components/ThemeProvider';
 import ErrorBoundary from '@/components/ErrorBoundary';
@@ -62,27 +60,23 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={`${inter.variable} font-sans bg-bg-primary text-text-primary transition-colors duration-200`}>
         <ThemeProvider>
           <SidebarProvider>
-            <AuthProvider>
-              <RouteGuard>
-                <OfflineBanner />
-                <ErrorHandler />
-                <ToastProvider>
-                   <div className="app-viewport-wrapper">
-                    <Sidebar />
-                    <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-                      <SystemStatusBar />
-                      <div className="main-content-canvas">
-                        <ErrorBoundary>
-                          <PageTransition>
-                            {children}
-                          </PageTransition>
-                        </ErrorBoundary>
-                      </div>
-                    </main>
+            <OfflineBanner />
+            <ErrorHandler />
+            <ToastProvider>
+               <div className="app-viewport-wrapper">
+                <Sidebar />
+                <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+                  <SystemStatusBar />
+                  <div className="main-content-canvas">
+                    <ErrorBoundary>
+                      <PageTransition>
+                        {children}
+                      </PageTransition>
+                    </ErrorBoundary>
                   </div>
-                </ToastProvider>
-              </RouteGuard>
-            </AuthProvider>
+                </main>
+              </div>
+            </ToastProvider>
           </SidebarProvider>
         </ThemeProvider>
       </body>

@@ -219,19 +219,6 @@ except Exception:  # pragma: no cover - defensive; GZipMiddleware ships with sta
     pass
 
 
-@app.middleware("http")
-async def api_auth(request: Request, call_next):
-    if CONFIG.valid_api_tokens() and (
-        request.url.path.startswith("/v1/") or request.url.path.startswith("/mcp")
-    ):
-        auth = request.headers.get("authorization", "")
-        if not auth.startswith("Bearer "):
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-        if not CONFIG.token_authorized(auth[7:]):
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-    return await call_next(request)
-
-
 # ---------- Rate limiting ----------
 
 _rate_buckets: Dict[str, "collections.deque[float]"] = {}
@@ -315,73 +302,6 @@ async def api_rate_limit(request: Request, call_next):
 
 
 # ---------- Admin gate ----------
-
-# Control-plane mutations that can change credentials, model config, or the
-# storage/database layer. These are the endpoints a LAN attacker would use to
-# take over the box, so they require the admin key (when one is configured).
-def _is_admin_mutation(method: str, path: str) -> bool:
-    if method not in ("POST", "DELETE", "PUT", "PATCH"):
-        return False
-    if path.startswith("/v1/config"):
-        return True
-    if path in ("/v1/models/load", "/v1/models/unload"):
-        return True
-    if path.startswith("/v1/router/harness/reset") or path.startswith("/v1/router/harness/adjust"):
-        return True
-    if path.startswith("/v1/loras/"):
-        return True
-    if path.startswith("/v1/memory/clear") or path.startswith("/v1/memory/prune"):
-        return True
-    if path.startswith("/v1/graph/nodes") or path.startswith("/v1/graph/edges"):
-        return True
-    if path.startswith("/v1/graph/sync") or path.startswith("/v1/graph/migrate"):
-        return True
-    if path.startswith("/v1/workspaces") and not path.endswith("/knowledge/search"):
-        return True
-    if path.startswith("/v1/agents") and not path.endswith("/run"):
-        return True
-    if path.startswith("/v1/skills") and not path.endswith("/run"):
-        return True
-    if path.startswith("/v1/images/generate") or path.startswith("/v1/vision/analyze"):
-        return True
-    if path.startswith("/v1/datascience/train") or path.startswith("/v1/healing/run"):
-        return True
-    if path.startswith("/v1/computer/run") or path.startswith("/v1/computer/stream"):
-        return True
-    if path.startswith("/v1/memory/store"):
-        return True
-    if path.startswith("/v1/rate/reset"):
-        return True
-    if path.startswith("/v1/chat/clear") or path.startswith("/v1/chat/conversations"):
-        return True
-    if path.startswith("/v1/terminal/exec") or path.startswith("/v1/terminal/python"):
-        return True
-    if path.startswith("/v1/terminal/fs/write") or path.startswith("/v1/terminal/fs/delete"):
-        return True
-    if path.startswith("/v1/terminal/fs/mkdir"):
-        return True
-    return False
-
-
-@app.middleware("http")
-async def admin_gate(request: Request, call_next):
-    """Require admin auth for control-plane mutations when auth is configured.
-
-    Accepts either the admin key (via ``X-Admin-Key`` header) or any valid
-    API token (Bearer), so an operator who only sets ``--api-token`` can still
-    manage the box while LAN clients on the same token are locked out of
-    mutations. When no admin key and no API tokens are configured the gate is
-    inert (matching the rest of the auth system).
-    """
-    if CONFIG.admin_key and _is_admin_mutation(request.method, request.url.path):
-        presented = request.headers.get("x-admin-key", "")
-        bearer = request.headers.get("authorization", "")
-        ok = CONFIG.admin_authorized(presented)
-        if not ok and bearer.startswith("Bearer "):
-            ok = CONFIG.token_authorized(bearer[7:])
-        if not ok:
-            return JSONResponse({"detail": "Admin key required"}, status_code=403)
-    return await call_next(request)
 
 # ---------- Pydantic Models ----------
 
@@ -992,9 +912,6 @@ def get_config():
             "rate_limit_per_min": CONFIG.openai.rate_limit_per_min,
             "backoff_max_s": CONFIG.openai.backoff_max_s,
         },
-        "api_token": bool(CONFIG.valid_api_tokens()),
-        "api_token_count": len(CONFIG.valid_api_tokens()),
-        "admin_key": bool(CONFIG.admin_key),
         "rate_limit": {
             "enabled": CONFIG.rate_limit.get("enabled", False),
             "light_per_min": CONFIG.rate_limit.get("light_per_min", 120),
@@ -1124,14 +1041,6 @@ def update_config(req: ConfigUpdate):
             CONFIG.healing["timeout_s"] = v
             return {"status": "updated", "key": req.key, "value": v}
         raise HTTPException(400, f"Unsupported healing key: {attr}")
-    if req.key == "api_token":
-        CONFIG.set_api_token(str(req.value))
-        return {"status": "updated", "key": req.key,
-                "value": bool(CONFIG.api_token),
-                "accepted": len(CONFIG.valid_api_tokens())}
-    if req.key == "admin_key":
-        CONFIG.admin_key = str(req.value).strip()
-        return {"status": "updated", "key": req.key, "value": bool(CONFIG.admin_key)}
     if req.key.startswith("rate_limit."):
         attr = req.key.split(".")[1]
         if attr == "enabled":

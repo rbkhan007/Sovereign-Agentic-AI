@@ -251,7 +251,6 @@ def main():
     parser.add_argument("--openai-key", help="OpenAI API key for cloud fallback")
     parser.add_argument("--openai-url", help="OpenAI-compatible base URL")
     parser.add_argument("--openai-model", help="OpenAI model name (default: gpt-4o-mini)")
-    parser.add_argument("--api-token", help="Require Bearer token on /v1/* endpoints (comma-separated = rotation set; primary first)")
     parser.add_argument("--parallel", action="store_true", help="Enable parallel multi-model generation")
     parser.add_argument("--no-parallel", action="store_true", help="Disable parallel multi-model generation")
     parser.add_argument("--parallel-max", type=int, default=0, help="Max models to run in parallel (0=default 2)")
@@ -304,8 +303,6 @@ def main():
                         help="PERMIT the /v1/computer/* API to run un-sandboxed (shell/python RCE risk; local opt-in only)")
     parser.add_argument("--allow-gui", action="store_true",
                         help="Enable the computer agent's mouse & keyboard tools (human-like GUI control; local opt-in only)")
-    parser.add_argument("--admin-key", metavar="KEY",
-                        help="Admin key (X-Admin-Key header) required for control-plane mutations like POST /v1/config, model load/unload, agent/skill/LoRA writes")
     parser.add_argument("--rate-limit", action="store_true",
                         help="Enable per-IP rate limiting on /v1/* and /mcp (light + heavy buckets)")
     parser.add_argument("--rate-light", metavar="N", type=int, default=None,
@@ -348,8 +345,6 @@ def main():
         CONFIG.openai.enabled = True
     if args.db:
         CONFIG.db.enabled = True
-    if args.api_token:
-        CONFIG.set_api_token(args.api_token)
     if args.parallel_max:
         CONFIG.parallel_max = max(1, args.parallel_max)
     if args.parallel:
@@ -419,9 +414,6 @@ def main():
     if args.allow_gui:
         CONFIG.computer["allow_gui"] = True
         logger.info("Computer agent mouse & keyboard (GUI) tools enabled (--allow-gui)")
-    if args.admin_key:
-        CONFIG.admin_key = args.admin_key.strip()
-        logger.info("Admin key set: control-plane mutations require X-Admin-Key")
     if args.rate_limit:
         CONFIG.rate_limit["enabled"] = True
         logger.info(f"Per-IP rate limiting enabled ({CONFIG.rate_limit['light_per_min']} light/min, {CONFIG.rate_limit['heavy_per_min']} heavy/min)")
