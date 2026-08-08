@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useEffect, useState } from 'react';
 import { fetchJSON, toArray } from '@/lib/api';
@@ -17,10 +17,10 @@ const SOFTWARE: { icon: React.ReactNode; title: string; desc: string }[] = [
   { icon: <AgentXIcon size={18} />, title: 'Agent X (All-in-One)', desc: 'A universal, autonomous agent that follows your goal and the project index to deliver complete, production-ready results.' },
   { icon: <LocalEngineIcon size={18} />, title: 'Local LLM Engine', desc: 'Runs GGUF models on your GPU via Vulkan with VRAM budgeting, LRU eviction and per-model worker threads.' },
   { icon: <GraphWebIcon size={18} />, title: 'Knowledge Graph', desc: 'Obsidian-style wiki-links, tags and backlinks with pgvector hybrid + recursive shortest-path search.' },
-  { icon: <WorkspacePaneIcon size={18} />, title: 'Workspaces', desc: 'Isolated chat areas with their own system prompt, file chunks and scoped memory — great for managing projects.' },
+  { icon: <WorkspacePaneIcon size={18} />, title: 'Workspaces', desc: 'Isolated chat areas with their own system prompt, file chunks and scoped memory â€” great for managing projects.' },
   { icon: <VisionLensIcon size={18} />, title: 'Computer Vision', desc: 'Local image understanding with Gemma 3 to describe screenshots and uploads for the agent.' },
   { icon: <ArtForgeIcon size={18} />, title: 'Image Generation', desc: 'On-device Stable Diffusion image synthesis, RAM-guarded and resolution-capped.' },
-  { icon: <ReactLoopIcon size={18} />, title: 'Computer Agent', desc: 'ReAct shell, file I/O, web and process tools — sandboxed by default, with a dangerous-command guard.' },
+  { icon: <ReactLoopIcon size={18} />, title: 'Computer Agent', desc: 'ReAct shell, file I/O, web and process tools â€” sandboxed by default, with a dangerous-command guard.' },
   { icon: <MemoryMatrixIcon size={18} />, title: 'Memory & Vector Store', desc: 'PostgreSQL + pgvector persistence with auto-pruning, sessions and per-workspace memory scopes.' },
   { icon: <SandboxShieldIcon size={18} />, title: 'Security & Sandbox', desc: 'Dangerous-pattern blocking, path-traversal-safe file ops, API tokens and rate limiting on every endpoint.' },
   { icon: <CloudBridgeIcon size={18} />, title: 'Cloud Fallback', desc: 'Optional OpenAI-compatible fallback with sliding-window rate limiting when local models are unavailable.' },
@@ -29,10 +29,10 @@ const SOFTWARE: { icon: React.ReactNode; title: string; desc: string }[] = [
 const ARCH_STAGES: { icon: React.ReactNode; title: string; desc: string }[] = [
   { icon: <PulseLineIcon size={18} />, title: 'Your Prompt', desc: 'Any task, in plain language.' },
   { icon: <GraphWebIcon size={18} />, title: 'Selection Room', desc: 'classify_task buckets code / math / summarize / translate / tool / creative / general.' },
-  { icon: <OrchestratorIcon size={18} />, title: 'Model Router', desc: 'Harness ranks executors by fitness = success·60 + speed·30 + recency·10.' },
+  { icon: <OrchestratorIcon size={18} />, title: 'Model Router', desc: 'Harness ranks executors by fitness = successÂ·60 + speedÂ·30 + recencyÂ·10.' },
   { icon: <ReactLoopIcon size={18} />, title: 'Planner (Hy-MT2)', desc: 'Generates 2 candidate plans, ranked by length for the shortest reliable path.' },
   { icon: <LocalEngineIcon size={18} />, title: 'Executors', desc: 'Gemma, Qwen2.5-Omni & Mythos-nano answer in parallel; the best wins.' },
-  { icon: <MemoryMatrixIcon size={18} />, title: 'Judge + Harness', desc: 'Every answer scored 0–10; scores feed back into the router.' },
+  { icon: <MemoryMatrixIcon size={18} />, title: 'Judge + Harness', desc: 'Every answer scored 0â€“10; scores feed back into the router.' },
 ];
 
 const CONTEXT_LAYER = [
@@ -45,15 +45,15 @@ const CONTEXT_LAYER = [
 
 const MODELS = [
   { name: 'Hy-MT2 1.8B', quant: 'Q4_K_M', role: 'Planner', vram: '~1.1 GB', tags: ['multi-candidate planning', 'low VRAM'], hf: 'gguf-plan-1.8b' },
-  { name: 'Gemma 4 E4B', quant: 'Q2_K_XL', role: 'Executor · Vision', vram: '~3 GB', tags: ['vision', 'instruction'], hf: 'gemma-4-e4b' },
+  { name: 'Gemma 4 E4B', quant: 'Q2_K_XL', role: 'Executor Â· Vision', vram: '~3 GB', tags: ['vision', 'instruction'], hf: 'gemma-4-e4b' },
   { name: 'Qwen2.5-Omni 3B', quant: 'Q4_K_M', role: 'Multimodal Executor', vram: '~2.5 GB', tags: ['multimodal', 'fast'], hf: 'qwen2.5-omni-3b' },
   { name: 'Mythos-nano', quant: 'Q5_K_M', role: 'Agent X core', vram: '~2.7 GB', tags: ['all-in-one', 'quality'], hf: 'mythos-nano' },
 ];
 
 const DATASETS = [
-  { icon: <DataLakeIcon size={18} />, title: 'ARC Grid Reasoning', desc: 'arc/training.json powers the /arc eval — measure grid-pattern accuracy per model.', meta: 'eval' },
+  { icon: <DataLakeIcon size={18} />, title: 'ARC Grid Reasoning', desc: 'arc/training.json powers the /arc eval â€” measure grid-pattern accuracy per model.', meta: 'eval' },
   { icon: <DataLakeIcon size={18} />, title: 'LoRA Fine-tuning', desc: 'Drop prompt/output pairs in lora_datasets/ and train a lightweight adapter on CPU (peft).', meta: 'train' },
-  { icon: <WorkspacePaneIcon size={18} />, title: 'Workspace Knowledge', desc: 'Upload docs to a workspace — chunked (600/120) and embedded for scoped retrieval.', meta: 'rag' },
+  { icon: <WorkspacePaneIcon size={18} />, title: 'Workspace Knowledge', desc: 'Upload docs to a workspace â€” chunked (600/120) and embedded for scoped retrieval.', meta: 'rag' },
   { icon: <VisionLensIcon size={18} />, title: 'Chat Uploads', desc: 'PDFs get preview text, images get a vision description inlined as context.', meta: 'files' },
   { icon: <GraphWebIcon size={18} />, title: 'Wiki Knowledge Base', desc: '[[wiki-links]], #tags and headings on markdown become graph nodes + backlinks.', meta: 'graph' },
   { icon: <MemoryMatrixIcon size={18} />, title: 'Sessions & Metrics', desc: 'Conversation history, persisted sessions and metrics snapshots for trend analysis.', meta: 'logs' },
@@ -91,10 +91,10 @@ function SystemPulse() {
   }, []);
 
   const items = [
-    { label: 'Total requests', value: pulse.online ? String(pulse.requests) : '—' },
-    { label: 'Models loaded', value: pulse.online ? String(pulse.models) : '—' },
-    { label: 'VRAM in use', value: pulse.online ? `${pulse.vram} MB` : '—' },
-    { label: 'CPU load', value: pulse.online ? `${Math.round(pulse.cpu)}%` : '—' },
+    { label: 'Total requests', value: pulse.online ? String(pulse.requests) : 'â€”' },
+    { label: 'Models loaded', value: pulse.online ? String(pulse.models) : 'â€”' },
+    { label: 'VRAM in use', value: pulse.online ? `${pulse.vram} MB` : 'â€”' },
+    { label: 'CPU load', value: pulse.online ? `${Math.round(pulse.cpu)}%` : 'â€”' },
   ];
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -142,19 +142,19 @@ export default function Landing() {
         <div className="mt-6 flex flex-wrap gap-3">
           <Link
             href="/dashboard"
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold bg-gradient-to-r from-accent to-accent-hover hover:from-accent-hover hover:to-accent text-white shadow-lg shadow-accent/25 transition-all"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-teal-400 hover:to-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/30 hover:shadow-emerald-500/40 transition-all"
           >
             <LayoutDashboard size={16} /> Enter Dashboard
           </Link>
           <Link
             href="/chat"
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium bg-bg-tertiary hover:bg-bg-hover text-text-primary border border-border transition-all"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium bg-bg-tertiary hover:bg-bg-hover text-text-primary border border-border transition-all"
           >
             Start Chatting <ArrowRight size={14} />
           </Link>
           <Link
             href="/terminal"
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium bg-bg-tertiary hover:bg-bg-hover text-text-primary border border-border transition-all"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium bg-bg-tertiary hover:bg-bg-hover text-text-primary border border-border transition-all"
           >
             <TerminalCodeIcon size={14} /> Agentic Terminal
           </Link>
@@ -177,7 +177,7 @@ export default function Landing() {
           <PulseLineIcon size={20} className="text-accent" /> Live system pulse
         </h2>
         <SystemPulse />
-        <p className="text-xs text-text-muted prose-ch">Auto-refreshes every 15s — open the <Link href="/dashboard" className="text-accent hover:underline">Dashboard</Link> for full graphs, model tables and hardware telemetry.</p>
+        <p className="text-xs text-text-muted prose-ch">Auto-refreshes every 15s â€” open the <Link href="/dashboard" className="text-accent hover:underline">Dashboard</Link> for full graphs, model tables and hardware telemetry.</p>
       </section>
 
       {/* Architecture */}
@@ -186,7 +186,7 @@ export default function Landing() {
           <h2 className="section-title">
             <OrchestratorIcon size={20} className="text-accent" /> Architecture
           </h2>
-          <p className="text-sm text-text-muted prose-ch mt-1">One plan-then-execute pass per request: every task is classified, routed, planned, executed in parallel and judged — then the scores teach the router.</p>
+          <p className="text-sm text-text-muted prose-ch mt-1">One plan-then-execute pass per request: every task is classified, routed, planned, executed in parallel and judged â€” then the scores teach the router.</p>
         </div>
         <div className="flow-diagram">
           {ARCH_STAGES.map((stage, i) => (
@@ -198,7 +198,7 @@ export default function Landing() {
                   <p className="text-[11px] text-text-muted mt-0.5 leading-relaxed">{stage.desc}</p>
                 </div>
               </div>
-              {i < ARCH_STAGES.length - 1 && <span className="flow-arrow" aria-hidden="true">→</span>}
+              {i < ARCH_STAGES.length - 1 && <span className="flow-arrow" aria-hidden="true">â†’</span>}
             </div>
           ))}
         </div>
@@ -218,7 +218,7 @@ export default function Landing() {
           <h2 className="section-title">
             <LocalEngineIcon size={20} className="text-accent" /> Hardware-optimized models
           </h2>
-          <p className="text-sm text-text-muted prose-ch mt-1">Bundled GGUF models tuned for a 6&nbsp;GB AMD RX&nbsp;5600&nbsp;XT (Vulkan). Models load one at a time and LRU-evict under the VRAM budget — the router picks the best fit per task.</p>
+          <p className="text-sm text-text-muted prose-ch mt-1">Bundled GGUF models tuned for a 6&nbsp;GB AMD RX&nbsp;5600&nbsp;XT (Vulkan). Models load one at a time and LRU-evict under the VRAM budget â€” the router picks the best fit per task.</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 stagger">
           {MODELS.map(m => (
@@ -238,7 +238,7 @@ export default function Landing() {
             </Card>
           ))}
         </div>
-        <p className="text-xs text-text-muted">Drop any GGUF into <code className="font-mono text-accent">models/</code> and it auto-registers as an executor — or register one from anywhere with <code className="font-mono text-accent">python run.py --add-model PATH --add-model-name NAME --add-model-role Executor</code>.</p>
+        <p className="text-xs text-text-muted">Drop any GGUF into <code className="font-mono text-accent">models/</code> and it auto-registers as an executor â€” or register one from anywhere with <code className="font-mono text-accent">python run.py --add-model PATH --add-model-name NAME --add-model-role Executor</code>.</p>
       </section>
 
       {/* Hugging Face download guide */}
@@ -247,18 +247,18 @@ export default function Landing() {
           <h2 className="section-title">
             <HubDownloadIcon size={20} className="text-accent" /> Download models from Hugging Face
           </h2>
-          <p className="text-sm text-text-muted prose-ch mt-1">Fetch GGUF quantizations into <code className="font-mono text-accent">models/</code> — the engine discovers and registers them on next start.</p>
+          <p className="text-sm text-text-muted prose-ch mt-1">Fetch GGUF quantizations into <code className="font-mono text-accent">models/</code> â€” the engine discovers and registers them on next start.</p>
         </div>
         <Card className="code-block space-y-3">
-          <p className="text-[11px] uppercase tracking-widest text-text-muted font-semibold">1 · CLI (recommended)</p>
+          <p className="text-[11px] uppercase tracking-widest text-text-muted font-semibold">1 Â· CLI (recommended)</p>
           <pre className="terminal-pre"><code>{`pip install "huggingface_hub[cli]"
 huggingface-cli download Qwen/Qwen2.5-3B-Instruct-GGUF \\
   qwen2.5-3b-instruct-q4_k_m.gguf --local-dir models/`}</code></pre>
-          <p className="text-[11px] uppercase tracking-widest text-text-muted font-semibold pt-1">2 · Direct link (wget)</p>
+          <p className="text-[11px] uppercase tracking-widest text-text-muted font-semibold pt-1">2 Â· Direct link (wget)</p>
           <pre className="terminal-pre"><code>{`wget -P models/ https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf`}</code></pre>
-          <p className="text-[11px] uppercase tracking-widest text-text-muted font-semibold pt-1">3 · Tip</p>
+          <p className="text-[11px] uppercase tracking-widest text-text-muted font-semibold pt-1">3 Â· Tip</p>
           <ul className="text-sm text-text-secondary list-disc pl-5 space-y-1">
-            <li>Pick a quant that fits your VRAM budget — the <span className="text-accent">Selection Room</span> routes tasks around what is loaded.</li>
+            <li>Pick a quant that fits your VRAM budget â€” the <span className="text-accent">Selection Room</span> routes tasks around what is loaded.</li>
             <li>Pick GGUF quant sizes under your budget so multiple models can live together in memory.</li>
             <li>No model installed yet? The <span className="text-accent">Cloud fallback</span> keeps the platform usable while you download.</li>
           </ul>
@@ -271,7 +271,7 @@ huggingface-cli download Qwen/Qwen2.5-3B-Instruct-GGUF \\
           <h2 className="section-title">
             <DataLakeIcon size={20} className="text-accent" /> Bring your own datasets
           </h2>
-          <p className="text-sm text-text-muted prose-ch mt-1">Everything is just files and folders on disk — feed the platform your own data for evals, training, retrieval and graphs.</p>
+          <p className="text-sm text-text-muted prose-ch mt-1">Everything is just files and folders on disk â€” feed the platform your own data for evals, training, retrieval and graphs.</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger">
           {DATASETS.map(d => (
@@ -323,7 +323,7 @@ huggingface-cli download Qwen/Qwen2.5-3B-Instruct-GGUF \\
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger">
           {agents.length === 0 ? (
-            <p className="text-text-muted text-sm inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading agents…</p>
+            <p className="text-text-muted text-sm inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading agentsâ€¦</p>
           ) : (
             agents.map(a => {
               const featured = a.name === 'agent_x';
@@ -357,18 +357,18 @@ huggingface-cli download Qwen/Qwen2.5-3B-Instruct-GGUF \\
       <section className="glass-card p-6 sm:p-8 text-center">
         <h3 className="text-lg font-semibold">Ready to put your local AI to work?</h3>
         <p className="text-text-muted text-sm mt-1.5 max-w-xl mx-auto">
-          Launch the dashboard to watch models, hardware and throughput live — or jump straight into the Agentic Terminal and let Agent X build your next project.
+          Launch the dashboard to watch models, hardware and throughput live â€” or jump straight into the Agentic Terminal and let Agent X build your next project.
         </p>
         <div className="mt-4 flex justify-center flex-wrap gap-3">
           <Link
             href="/dashboard"
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold bg-gradient-to-r from-accent to-accent-hover hover:from-accent-hover hover:to-accent text-white shadow-lg shadow-accent/25 transition-all"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-teal-400 hover:to-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/30 hover:shadow-emerald-500/40 transition-all"
           >
             <LayoutDashboard size={16} /> Enter Dashboard
           </Link>
           <Link
             href="/terminal"
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium bg-bg-tertiary hover:bg-bg-hover text-text-primary border border-border transition-all"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium bg-bg-tertiary hover:bg-bg-hover text-text-primary border border-border transition-all"
           >
             <TerminalCodeIcon size={14} /> Open Agentic Terminal
           </Link>
@@ -378,3 +378,5 @@ huggingface-cli download Qwen/Qwen2.5-3B-Instruct-GGUF \\
     </div>
   );
 }
+
+

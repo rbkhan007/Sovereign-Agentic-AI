@@ -15,6 +15,8 @@ machine** — there is no telemetry and no forced cloud. The most sensitive surf
   run caller-supplied code unless `--allow-unsafe-healing` is passed. Keep it off on any
   host reachable from untrusted networks.
 - **Agentic Terminal API** (`POST /v1/terminal/exec|python`): sandboxed, but still powerful.
+  `shell=True` commands are confined to the project directory (`..` traversal, drive-absolute
+  paths, UNC paths, and absolute `cd` are rejected), and Python execution is sandbox-gated.
   Protect it with `--api-token` / `--admin-key` when exposing the server.
 - **File uploads / workspace files**: paths are sanitized against traversal and served via
   `SafeStaticFiles` with `nosniff` + attachment disposition.
@@ -23,7 +25,7 @@ machine** — there is no telemetry and no forced cloud. The most sensitive surf
 ## Recommended hardening
 
 - Run `python run.py --sandbox` to force sandbox mode (no DB writes, isolated conversations,
-  file ops scoped to the project directory).
+  file ops scoped to the project directory, shell commands that escape the project rejected).
 - Use `--api-token` (Bearer on `/v1/*` and `/mcp`) and `--admin-key` (control-plane
   mutations) when the API is reachable over a network.
 - Use `--rate-limit` to protect against per-IP abuse.

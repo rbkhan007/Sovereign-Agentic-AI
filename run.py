@@ -277,7 +277,7 @@ def main():
     parser.add_argument("--add-model-role", default="Executor", help="Role for --add-model (default: Executor)")
     parser.add_argument("--db", action="store_true", help="Enable PostgreSQL memory")
     parser.add_argument("--web-search", action="store_true", help="Enable DuckDuckGo web search for live queries")
-    parser.add_argument("--db-password", default="postgres", help="Database password")
+    parser.add_argument("--db-password", default=None, help="Database password (default: PGPASSWORD env or 'postgres')")
     parser.add_argument("--db-name", help="Database name (default: rhasan_indie_agentic_llm)")
     parser.add_argument("--db-user", help="Database user (default: postgres)")
     parser.add_argument("--db-host", help="Database host (default: localhost)")
@@ -308,9 +308,9 @@ def main():
                         help="Admin key (X-Admin-Key header) required for control-plane mutations like POST /v1/config, model load/unload, agent/skill/LoRA writes")
     parser.add_argument("--rate-limit", action="store_true",
                         help="Enable per-IP rate limiting on /v1/* and /mcp (light + heavy buckets)")
-    parser.add_argument("--rate-light", metavar="N", type=int, default=120,
+    parser.add_argument("--rate-light", metavar="N", type=int, default=None,
                         help="Max light requests per IP per minute (default 120)")
-    parser.add_argument("--rate-heavy", metavar="N", type=int, default=10,
+    parser.add_argument("--rate-heavy", metavar="N", type=int, default=None,
                         help="Max heavy/generation requests per IP per minute (default 10)")
     parser.add_argument("--no-rate-exempt-local", action="store_true",
                         help="Do NOT exempt 127.0.0.1/::1 from rate limits")
@@ -424,9 +424,11 @@ def main():
         logger.info("Admin key set: control-plane mutations require X-Admin-Key")
     if args.rate_limit:
         CONFIG.rate_limit["enabled"] = True
-        logger.info(f"Per-IP rate limiting enabled ({args.rate_light} light/min, {args.rate_heavy} heavy/min)")
-    CONFIG.rate_limit["light_per_min"] = max(1, args.rate_light)
-    CONFIG.rate_limit["heavy_per_min"] = max(1, args.rate_heavy)
+        logger.info(f"Per-IP rate limiting enabled ({CONFIG.rate_limit['light_per_min']} light/min, {CONFIG.rate_limit['heavy_per_min']} heavy/min)")
+    if args.rate_light is not None:
+        CONFIG.rate_limit["light_per_min"] = max(1, args.rate_light)
+    if args.rate_heavy is not None:
+        CONFIG.rate_limit["heavy_per_min"] = max(1, args.rate_heavy)
     if args.no_rate_exempt_local:
         CONFIG.rate_limit["exempt_localhost"] = False
     if args.web_search:
@@ -459,6 +461,13 @@ def main():
     auto_detect_config()
     validate_config()
 
+    if args.force_port:
+        kill_port(args.port)
+        time.sleep(1)
+    else:
+        args.port = resolve_port(args.port)
+        CONFIG.port = args.port
+
     nextjs_proc = None
     if args.nextjs:
         frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
@@ -481,13 +490,6 @@ def main():
                 logger.warning(f"Next.js dev server failed to start: {e}")
         else:
             logger.warning("Next.js frontend not found in ./frontend/")
-
-    if args.force_port:
-        kill_port(args.port)
-        time.sleep(1)
-    else:
-        args.port = resolve_port(args.port)
-        CONFIG.port = args.port
 
     if CONFIG.db.enabled:
         try:

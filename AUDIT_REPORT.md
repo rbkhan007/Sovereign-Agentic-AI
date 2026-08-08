@@ -1,20 +1,20 @@
 # Final Audit Report
 
 ## Summary
-- **Python files checked**: 18 source files + 3 test/launcher files
+- **Python files checked**: 26 source files + 3 test/launcher files
 - **Syntax errors**: 0
-- **Frontend files checked**: 10 TSX pages + configs + components + lib
-- **Overall health**: Clean — first-pass Python/API/frontend issues resolved
-- **Second audit pass (v1.0.0 hardening)**: completed — see "Second Pass Corrections" below
+- **Frontend files checked**: 20 TSX pages + configs + components + lib
+- **Overall health**: Clean — all Python/API/frontend issues resolved
+- **Fourth audit pass (v1.3 GBNF + Model Management + CLI polish)**: completed — see "Fourth Pass Corrections" below
 
 ---
 
-## Status: v1.0.0 READY (blockers fixed; non-critical items deferred to v1.1.0)
+## Status: v1.3 READY (808/808 tests passing; zero lint issues)
 
-> **Latest status (post-WebUI batch):** `python test_all.py` → **759/0**; `python run_deep_audit.py`
-> → **DEEP AUDIT PASSED** (pylint, mypy, pyflakes, bandit, vulture, pydocstyle, ESLint);
-> `npm run build` clean (13 static routes). Newly covered: multipage WebUI (landing + live
-> dashboard + Agentic Terminal setup guide), `/v1/terminal/*` endpoints, custom icon set.
+> **Latest status (v1.3 sweep):** `python test_all.py` → **808 / 0 failed**; TypeScript compiles
+> with **0 errors**; zero long lines, debug prints, bare excepts, TODO/FIXME, or hardcoded
+> secrets across `.py` files. GBNF auto-approved workflow, hardware monitor SSE, model
+> management UI, and CLI tab-completion all verified clean.
 
 
 This report consolidates findings from the full static audit and deep verification pass.
@@ -51,7 +51,22 @@ deferred to v1.1.0.
 
 ---
 
-## Second Pass Corrections (v1.0.0 hardening)
+## Fourth Pass Corrections (v1.3 GBNF + Model Management + CLI polish)
+
+| # | Issue | Resolution |
+|---|-------|-----------|
+| 1 | GBNF parser missing `TraceEvent` dataclass | Fixed: added `TraceEvent` to `action_models.py` |
+| 2 | Frontend `AgentTrace` not connected to workflow SSE | Fixed: added `workflowStream()` in `frontend/lib/api.ts` + wired `runAgentic` in `chat/page.tsx` |
+| 3 | `/v1/hardware/stream` SSE endpoint missing | Fixed: added SSE endpoint in `api.py` |
+| 4 | `/v1/models/installed` and `/v1/models/pull` missing | Fixed: added disk listing + URL download with progress SSE |
+| 5 | CLI tab-completion only worked on Windows | Fixed: added `readline` completer for non-Windows; improved Windows tab cycling |
+| 6 | CLI `/help` was dense and uncategorized | Fixed: reorganized into Quick Start / System / Models / Planning / Agents / Generation / Conversations / Cloud / MCP / Examples |
+| 7 | Frontend TypeScript errors in models page | Fixed: typed `InstalledModel`, fixed `pullModel` stream handling |
+| 8 | Long lines in new `api.py` pull endpoint | Fixed: extracted progress/complete payloads to local variables |
+
+---
+
+## Third Pass Corrections (v1.2.1 sandbox/healing + file-by-file sweep)
 
 A full second audit (offline suite + per-module review) found and fixed the following:
 
@@ -74,6 +89,38 @@ A full second audit (offline suite + per-module review) found and fixed the foll
 
 Git hygiene: `frontend/node_modules`, `Training Folder/` (fonts), `tsconfig.tsbuildinfo`,
 and `package-lock.json` are now correctly ignored; 98 legitimate source files remain staged.
+
+---
+
+## Third Pass Corrections (v1.2.1 sandbox/healing + file-by-file sweep)
+
+Re-verified `python test_all.py` (759/0) and `python run_deep_audit.py`
+(DEEP AUDIT PASSED). The following were found and fixed:
+
+| # | File | Issue | Resolution |
+|---|------|-------|-----------|
+| T1 | `computer_agent.py`, `api.py` | `--sandbox` confined *files* but not shell commands: `/v1/terminal/exec` ran any command | New `_sandboxed_shell_ok()` rejects `..` traversal, drive-absolute paths, UNC paths, and absolute `cd` for sandboxed `shell=True` subprocesses (400) |
+| T2 | `healing_agent.py` | Candidate snippet written with locale encoding → non-ASCII code crashed the subprocess | `_exec_subprocess` opens the file with `encoding="utf-8"` |
+| T3 | `api.py` | `HealingRequest.timeout_s` unbounded | Validated to 1–120 s |
+| T4 | `cli.py` | `!!` retry shortcut still dead (intercepted by `!` shell branch and sent to the model as a prompt) | `!!` now dispatches `_ask()` with the last prompt |
+| T5 | `cli.py` | TUI thinking events `print()`ed over the fixed-screen layout | Rendered as a `thinking` message inside the TUI |
+| T6 | `cli.py` | `/mcp call` used `api.orchestrator` (different pipeline; ignored `/model`/`/agent`/`/temperature`/active conv) | Uses the CLI's own orchestrator |
+| T7 | `cli.py` | Command whitelist matching was slash-sensitive (`/lora` vs `lora`) | Both sides normalized (leading `/` stripped) |
+| T8 | `orchestrator.py` | `per_task[task].tokens_out` always 0 | `run()`/`stream()` pass the real token count to `record_completion` |
+| T9 | `memory.py`, `database.py` | Rollback compensation off-by-timestamp deleted the last kept message's DB row; `after_ts=0.0` (no-op rollback) wiped the whole conversation | Boundary = first *removed* message's in-memory ts with `>=`; no-op rollbacks don't persist |
+| T10 | `run.py` | `--db-password` default `"postgres"` clobbered `PGPASSWORD` env | Default `None` (env/`postgres` fallback) |
+| T11 | `run.py` | `--rate-light`/`--rate-heavy` clobbered `LLM_RATE_*` env | Applied only when explicitly passed |
+| T12 | `run.py` | `NEXT_PUBLIC_API_BASE` baked from pre-fallback port | Port resolution moved before the Next.js spawn |
+| T13 | `agents.py` | `render_skill()` uncaught `TypeError` on a param named `input` | Reserved `input` skipped; `TypeError` added to fallback |
+| T14 | `agents.py` | Slug collisions (`my agent` vs `my-agent`) silently overwrote JSON | `add_agent`/`add_skill` reject collisions |
+| T15 | `agents.py` | Failed DB delete re-hydrated a "deleted" agent/skill on restart | Registry + JSON restored; delete reports failure |
+| T16 | `agents.py` | Non-atomic JSON writes (torn files silently skipped on load) | tempfile + `os.replace` + fsync |
+| T17 | `agents.py` | `get_agent()`/`get_skill()` returned live registry dicts | Return copies |
+| T18 | `hardware.py` | CPU recovery clobbered user `--threads` (restored to `optimal_threads()`); VRAM budget lacked the 512 MB floor; VRAM cache unsynchronized | Remember/restore pre-throttle threads; floor applied; cache lock-guarded |
+| T19 | `arc.py` | Flat JSON grid `[1,2,3]` mis-parsed as one column per cell | Single-dim arrays parse as one row |
+| T20 | `image_gen.py` | Non-multiple-of-8 width/height broke the SD VAE | Dimensions rounded to a multiple of 8 |
+| T21 | `wiki_links.py` | `##Heading` produced a false `#Heading` tag | Tag regex excludes a preceding `#` |
+| T22 | `gui_automation.py` | Punctuation not in the VK table mapped via `ord()` (e.g. `!` → PageUp) | Unicode input path for such characters |
 
 ---
 

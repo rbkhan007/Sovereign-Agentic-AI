@@ -31,6 +31,7 @@ _LIVE_INTERVAL = 1.5
 _VRAM_TTL = 5.0
 _vram_used_cache: int = 0
 _vram_used_at: float = 0.0
+_vram_cache_lock = threading.Lock()
 
 
 def _ram_total_mb() -> int:
@@ -223,10 +224,11 @@ def _vram_used_mb_cached(ttl: float = _VRAM_TTL) -> int:
     nvidia-smi/torch probes on every tick."""
     global _vram_used_cache, _vram_used_at
     now = time.time()
-    if now - _vram_used_at > ttl:
-        _vram_used_cache = _vram_used_mb()
-        _vram_used_at = now
-    return _vram_used_cache
+    with _vram_cache_lock:
+        if now - _vram_used_at > ttl:
+            _vram_used_cache = _vram_used_mb()
+            _vram_used_at = now
+        return _vram_used_cache
 
 
 def _cpu_name() -> str:
@@ -426,6 +428,7 @@ class HardwareMonitor:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._violations = 0
+        self._restore_threads: Optional[int] = None
 
     def start(self):
         self._thread = threading.Thread(target=self._loop, daemon=True, name="hw-monitor")
@@ -446,14 +449,14 @@ class HardwareMonitor:
             info = detect_hardware(force=False)
             ram_avail = info.get("ram_available_mb", 0)
             vram_total = info.get("gpu_vram_mb", 0)
-            vram_budget = CONFIG.vram_budget_mb or (vram_total - 1024 if vram_total else 0)
+            vram_budget = CONFIG.vram_budget_mb or (max(512, vram_total - 1024) if vram_total else 0)
             vram_used = info.get("gpu_vram_used_mb", 0)
             cpu_util = info.get("cpu_utilization", 0.0)
 
             if ram_avail > 0 and ram_avail < 4096:
                 logger.warning(f"RAM low: {ram_avail} MB available (floor 4096 MB)")
                 self._violations += 1
-                self._evict_lru(keep=set())
+                self._evict_lru(keep=set(), ram_floor_mb=4096)
 
             if vram_budget > 0 and vram_used > 0 and vram_used > vram_budget:
                 logger.warning(f"VRAM over budget: {vram_used} MB used > {vram_budget} MB budget")
@@ -477,21 +480,30 @@ class HardwareMonitor:
                 self._violations += 1
                 target_threads = max(1, (info.get("cpu_cores", 4) + 1) // 3)
                 if CONFIG.threads > target_threads:
+                    if self._restore_threads is None:
+                        self._restore_threads = CONFIG.threads
                     CONFIG.threads = target_threads
                     CONFIG.sync_threads()
                     logger.info(f"Throttled threads to {CONFIG.threads}")
             else:
-                # Recover: restore the auto-tuned thread count once CPU pressure
-                # subsides so inference speed isn't permanently degraded.
-                if CONFIG.threads < optimal_threads():
-                    CONFIG.threads = optimal_threads()
+                # Recover: restore the pre-throttle thread count once CPU pressure
+                # subsides so inference speed isn't permanently degraded and a
+                # user-set --threads value is honored.
+                if self._restore_threads is not None and CONFIG.threads < self._restore_threads:
+                    CONFIG.threads = self._restore_threads
                     CONFIG.sync_threads()
                     logger.info(f"Restored threads to {CONFIG.threads} after CPU recovered")
+                self._restore_threads = None
 
-    def _evict_lru(self, keep: set):
+    def _evict_lru(self, keep: set, ram_floor_mb: int = 0):
         from models import _least_recently_used
         guard = 0
         while guard < 8:
+            # Under RAM pressure, stop evicting as soon as free RAM is back
+            # above the floor so models stay warm instead of being unloaded
+            # wholesale on every tick (which forces slow reloads per request).
+            if ram_floor_mb > 0 and _ram_available_mb() >= ram_floor_mb:
+                break
             victim = _least_recently_used(except_names=keep)
             if victim is None:
                 break

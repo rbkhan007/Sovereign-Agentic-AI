@@ -60,6 +60,11 @@ def _deps_available() -> bool:
     return True
 
 
+def _round8(value: int) -> int:
+    """Round to the nearest multiple of 8 (the Stable Diffusion VAE requirement)."""
+    return max(8, int(round(value / 8.0)) * 8)
+
+
 def _cap(value, low, high, default):
     try:
         v = int(value)
@@ -94,6 +99,8 @@ def generate_image(prompt: str, width: int = 0, height: int = 0,
     width = _cap(width, 256, 512, c.get("width", 384))
     height = _cap(height, 256, 512, c.get("height", 384))
     steps = _cap(steps, 8, 40, c.get("steps", 18))
+    width = _round8(width)
+    height = _round8(height)
     model_id = c.get("model", "runwayml/stable-diffusion-v1-5")
 
     with _LOCK:

@@ -14,6 +14,9 @@ from config import CONFIG
 from router import ModelRouter, classify_task
 from metrics import metrics as _metrics
 import database as db
+from action_models import AgentContext
+from gbnf_parser import parse_actions, GbnfParseError
+from action_dispatcher import dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +96,17 @@ STRATEGIST_PROMPT = (
     "Keep your plan short and actionable. End with FINAL_ANSWER: followed by your plan summary."
 )
 
+# The strategist's output format ("End with FINAL_ANSWER:") can leak the marker
+# into user-facing answers when a model echoes it; strip a leading marker so
+# responses read naturally ("FINAL_ANSWER: 4" -> "4").
+_FINAL_ANSWER_RE = re.compile(r"^\s*FINAL\s*_?ANSWER\s*:\s*", re.IGNORECASE)
+
+
+def _strip_plan_marker(text: Optional[str]) -> str:
+    if not text:
+        return text or ""
+    return _FINAL_ANSWER_RE.sub("", text, count=1).lstrip()
+
 THINK_MAX_TOKENS = 256
 MAX_TOKENS_CAP = 8192
 
@@ -115,8 +129,24 @@ class Orchestrator:
     def __init__(self, model_manager: ModelManager, memory_manager: MemoryManager):
         self.models = model_manager
         self.memory = memory_manager
-        self.executor = "hy-mt2"
         self.router = ModelRouter(model_manager)
+        self.executor = self._pick_default_executor()
+
+    def _pick_default_executor(self) -> str:
+        """Default answerer: prefer a real Executor-role model over the
+        Strategist (which stays the planner), so out-of-the-box chats get the
+        strongest model instead of the tiny 1.8B planner."""
+        try:
+            for name in self.router.executor_names():
+                role = (getattr(self.models.configs.get(name), "role", "") or "")
+                if "Executor" in role and "Strategist" not in role:
+                    return name
+            resolved = self.router.primary("general")
+            if resolved:
+                return resolved
+        except Exception as e:
+            logger.warning(f"Default executor selection failed: {e}")
+        return "hy-mt2"
 
     def _resolve_executor(self, model_override: Optional[str]) -> str:
         if model_override and model_override in self.models.configs:
@@ -149,11 +179,13 @@ class Orchestrator:
 
     def _judge_response(self, question: str, answer: str) -> float:
         try:
-            prompt = (
-                f"{CHAT_TEMPLATE.format(role='system', content='Rate the answer quality from 0 to 10. Reply with ONLY a number.')}\n"
-                f"{CHAT_TEMPLATE.format(role='user', content=f'Q: {question[:1000]}\nA: {answer[:1500]}')}\n"
-                f"<|im_start|>assistant\n"
+            system_prompt = CHAT_TEMPLATE.format(
+                role='system', content='Rate the answer quality from 0 to 10. Reply with ONLY a number.'
             )
+            user_prompt = CHAT_TEMPLATE.format(
+                role='user', content=f'Q: {question[:1000]}\nA: {answer[:1500]}'
+            )
+            prompt = f"{system_prompt}\n{user_prompt}\nassistant\n"
             text = self.models.generate("hy-mt2", prompt, max_tokens=16, temperature=0.0)
             m = re.search(r"\b(\d{1,2}(?:\.\d)?)\b", text or "")
             return min(float(m.group()), 10.0) if m else 5.0
@@ -376,11 +408,24 @@ class Orchestrator:
             if CONFIG.auto_load and hasattr(self.models, "ensure_loaded"):
                 keep = ["hy-mt2"] if (use_planning and "hy-mt2" in self.models.configs) else []
                 target = ([exec_model] + [n for n in ranked if n != exec_model]) if parallel else [exec_model]
-                self.models.ensure_loaded(target, keep=keep)
-            if parallel:
+                loaded = self.models.ensure_loaded(target, keep=keep)
+                if not loaded:
+                    loaded = target
+                if parallel:
+                    executors = [n for n in (ranked or [exec_model]) if n in loaded]
+                    if exec_model not in executors:
+                        executors = [exec_model] + executors
+                    executors = executors[:max(1, CONFIG.parallel_max)]
+                else:
+                    executors = [exec_model]
+            elif parallel:
                 executors = ranked or [exec_model]
                 if exec_model not in executors:
                     executors = [exec_model] + executors
+                executors = executors[:max(1, CONFIG.parallel_max)]
+            else:
+                executors = [exec_model]
+            if parallel and len(executors) > 1:
                 candidates = self._generate_candidates(exec_prompt, executors,
                                                        max_tokens=max_tokens or 2048,
                                                        temperature=temperature)
@@ -391,7 +436,7 @@ class Orchestrator:
                 response = self.models.generate(exec_model, exec_prompt,
                                                 max_tokens=max_tokens or 2048,
                                                 temperature=temperature)
-            _metrics.record_completion(task=task, ok=True)
+            _metrics.record_completion(task=task, tokens_out=len(response.split()), ok=True)
             self.router.harness.record(task, exec_model, True,
                                        latency=_time.time() - gen_start,
                                        tokens=len(response.split()))
@@ -414,6 +459,7 @@ class Orchestrator:
                     if "hy-mt2" in self.models.instances:
                         self.models.unload("hy-mt2")
 
+        response = _strip_plan_marker(response)
         conv.add("assistant", response)
 
         if not sandbox and CONFIG.db.enabled and response:
@@ -423,7 +469,7 @@ class Orchestrator:
             except Exception:
                 logger.warning("Memory store failed", exc_info=True)
 
-        result = {"thinking": thinking, "response": response, "model": exec_model}
+        result: Dict[str, object] = {"thinking": thinking, "response": response, "model": exec_model}
         if parallel_count:
             result["parallel_candidates"] = parallel_count
         return result
@@ -547,13 +593,35 @@ class Orchestrator:
             try:
                 if CONFIG.auto_load and hasattr(self.models, "ensure_loaded"):
                     self.models.ensure_loaded([exec_model])
-                for chunk in self.models.generate_stream(exec_model, exec_prompt,
-                                                         max_tokens=max_tokens or 2048,
-                                                         temperature=temperature):
-                    if chunk:
-                        parts.append(chunk)
-                        yield {"type": "response", "content": chunk}
-                _metrics.record_completion(task=task, ok=True)
+                gen = self.models.generate_stream(exec_model, exec_prompt,
+                                                  max_tokens=max_tokens or 2048,
+                                                  temperature=temperature)
+                try:
+                    _marker_buf = ""
+                    _marker_done = False
+                    for chunk in gen:
+                        if not chunk:
+                            continue
+                        if not _marker_done:
+                            _marker_buf += chunk
+                            if len(_marker_buf) >= 24 or not chunk.strip():
+                                _marker_done = True
+                                cleaned = _strip_plan_marker(_marker_buf)
+                                _marker_buf = ""
+                                if cleaned:
+                                    parts.append(cleaned)
+                                    yield {"type": "response", "content": cleaned}
+                        else:
+                            parts.append(chunk)
+                            yield {"type": "response", "content": chunk}
+                    if _marker_buf:
+                        cleaned = _strip_plan_marker(_marker_buf)
+                        if cleaned:
+                            parts.append(cleaned)
+                            yield {"type": "response", "content": cleaned}
+                finally:
+                    gen.close()
+                _metrics.record_completion(task=task, tokens_out=len("".join(parts).split()), ok=True)
                 self.router.harness.record(task, exec_model, True,
                                            latency=_time.time() - gen_start,
                                            tokens=len("".join(parts).split()))
@@ -677,7 +745,7 @@ class Orchestrator:
                    "elapsed": round(_time.time() - start, 3)}
             return
 
-        for evt in self.stream(
+        inner = self.stream(
             user_message=user_message,
             conv_id=conv_id,
             use_planning=use_planning,
@@ -687,12 +755,18 @@ class Orchestrator:
             max_tokens=max_tokens,
             workspace_id=workspace_id,
             sandbox=sandbox,
-        ):
-            if evt.get("type") == "thinking" and not stream_thoughts:
-                continue
-            if evt.get("type") == "thinking" and not CONFIG.auto_stream_thinking:
-                continue
-            yield evt
+        )
+        try:
+            for evt in inner:
+                if evt.get("type") == "thinking" and not stream_thoughts:
+                    continue
+                if evt.get("type") == "thinking" and not CONFIG.auto_stream_thinking:
+                    continue
+                yield evt
+        finally:
+            close = getattr(inner, "close", None)
+            if callable(close):
+                close()
 
     def _select_best_plan(self, user_message: str, memories: list, callback: Optional[Callable] = None) -> str:
         mem_context = ""
@@ -772,3 +846,180 @@ class Orchestrator:
             _record_openai_failure()
             logger.error(f"OpenAI call failed: {e}")
             raise RuntimeError(f"OpenAI call failed: {e}") from e
+
+    def run_auto_approved_workflow(
+        self,
+        goal: str,
+        conv_id: str = "default",
+        workspace_id: str = "default",
+        event_callback: Optional[Callable[[dict], None]] = None,
+        max_steps: int = 25,
+        step_timeout_s: float = 120.0,
+    ) -> dict:
+        """Execute the GBNF-constrained auto-approved workflow.
+
+        Flow: goal -> plan -> (execute -> judge -> memory) * N -> DONE
+
+        Yields structured events via *event_callback*:
+          {"type": "plan", "content": ...}
+          {"type": "trace", "action": ..., "output": ...}
+          {"type": "complete", "result": ..., "elapsed_s": ...}
+          {"type": "error", "content": ...}
+        """
+        ctx = AgentContext(
+            goal=goal,
+            conv_id=conv_id,
+            workspace_id=workspace_id,
+            max_steps=max_steps,
+            step_timeout_s=step_timeout_s,
+        )
+
+        def emit(evt: dict) -> None:
+            if event_callback:
+                try:
+                    event_callback(evt)
+                except Exception as e:
+                    logger.warning(f"event_callback error: {e}")
+
+        try:
+            plan = self._select_best_plan(goal)
+            if plan:
+                emit({"type": "plan", "content": plan})
+
+            task = classify_task(goal)
+            executor = self.router.primary(task)
+            if not executor or executor not in self.models.configs:
+                raise RuntimeError(f"No executor available for task={task}")
+
+            ctx.executor_model = executor
+            gbnf_system = (
+                "You are an autonomous coding agent. Output EXACTLY ONE action per step.\n"
+                "Actions: [THINK]: reasoning\n"
+                "         [BASH]: shell command\n"
+                "         [READ]: file path\n"
+                "         [WRITE]: file path\n"
+                "           <full file content follows on subsequent lines>\n"
+                "         [DONE]: summary\n"
+                "Rules:\n"
+                "1. Inspect first with [READ] and [BASH] before changing anything.\n"
+                "2. [WRITE] must include the COMPLETE file content, ending before the next action line.\n"
+                "3. Only emit [DONE] when the task is verified complete.\n"
+                "4. Never run destructive commands (rm -rf /, dd, mkfs, shutdown, format).\n"
+            )
+
+            for step in range(max_steps):
+                if ctx.done:
+                    break
+
+                prompt = (
+                    f"{CHAT_TEMPLATE.format(role='system', content=gbnf_system)}\n"
+                    f"{CHAT_TEMPLATE.format(role='user', content=goal + '\n\nScratchpad:\n' + ctx.scratchpad)}\n"
+                    f"assistant\n"
+                )
+
+                try:
+                    raw = self.models.generate(
+                        executor,
+                        prompt,
+                        max_tokens=2048,
+                        temperature=0.2,
+                        stop=["\n\n\n", ""],
+                    )
+                except Exception as e:
+                    emit({"type": "error", "content": f"Generation failed: {e}"})
+                    break
+
+                if not raw:
+                    emit({"type": "error", "content": "Empty response from executor"})
+                    break
+
+                try:
+                    actions = parse_actions(raw)
+                except GbnfParseError as e:
+                    emit({"type": "error", "content": f"Parse error: {e}"})
+                    ctx.record(Action(type=ActionType.THINK, content=f"Retry: {e}", success=False, step=step + 1))
+                    continue
+
+                action = actions[0]
+                action.step = step + 1
+                dispatch(action, ctx)
+
+                emit({
+                    "type": "trace",
+                    "step": step + 1,
+                    "action": action.type.value,
+                    "path": action.path,
+                    "content": action.content[:500] if action.content else "",
+                    "success": action.success,
+                    "error": action.error,
+                    "elapsed_s": action.elapsed_s,
+                })
+
+                if action.type == ActionType.DONE:
+                    emit({"type": "complete", "result": action.content, "elapsed_s": ctx.elapsed()})
+                    break
+
+                if not action.success and action.type == ActionType.BASH:
+                    retry_user = (
+                        goal + "\n\nLast command failed:\n" + (action.error or "")
+                        + "\n\nScratchpad:\n" + ctx.scratchpad
+                    )
+                    retry_prompt = (
+                        f"{CHAT_TEMPLATE.format(role='system', content=gbnf_system)}\n"
+                        f"{CHAT_TEMPLATE.format(role='user', content=retry_user)}\n"
+                        f"assistant\n"
+                    )
+                    try:
+                        raw = self.models.generate(
+                            executor,
+                            retry_prompt,
+                            max_tokens=2048,
+                            temperature=0.2,
+                            stop=["\n\n\n", ""],
+                        )
+                        if raw:
+                            actions = parse_actions(raw)
+                            if actions:
+                                action = actions[0]
+                                action.step = step + 1
+                                dispatch(action, ctx)
+                                emit({
+                                    "type": "trace",
+                                    "step": step + 1,
+                                    "action": action.type.value,
+                                    "path": action.path,
+                                    "content": action.content[:500] if action.content else "",
+                                    "success": action.success,
+                                    "error": action.error,
+                                    "elapsed_s": action.elapsed_s,
+                                })
+                                if action.type == ActionType.DONE:
+                                    emit({"type": "complete", "result": action.content, "elapsed_s": ctx.elapsed()})
+                                    break
+                    except Exception as retry_e:
+                        logger.warning(f"Retry generation failed at step {step + 1}: {retry_e}")
+
+            if not ctx.done:
+                emit({"type": "complete", "result": ctx.scratchpad, "elapsed_s": ctx.elapsed()})
+
+            try:
+                db.store_thought(
+                    executor,
+                    f"AUTO_APPROVED: {goal}\n\nResult:\n{ctx.result or ctx.scratchpad}",
+                    conv_id=conv_id,
+                    workspace_id=workspace_id,
+                )
+            except Exception as store_e:
+                logger.warning(f"Auto-approved workflow memory store failed: {store_e}")
+
+            return {
+                "result": ctx.result or ctx.scratchpad,
+                "elapsed_s": ctx.elapsed(),
+                "steps": len(ctx.actions),
+                "executor": executor,
+            }
+
+        except Exception as e:
+            logger.error(f"Auto-approved workflow failed: {e}")
+            emit({"type": "error", "content": str(e)})
+            return {"error": str(e), "elapsed_s": ctx.elapsed()}

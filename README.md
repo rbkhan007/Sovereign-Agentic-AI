@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-759%20%2F%200-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-808%20%2F%200-brightgreen">
   <img alt="CI" src="https://github.com/rbkhan007/Sovereign-Agentic-AI/actions/workflows/ci.yml/badge.svg">
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
@@ -270,10 +270,11 @@ _matches(pred, target, exact):
 | Adaptive per-task model routing | ✅ | Epsilon-greedy harness fitness |
 | Parallel multi-model answers | ✅ | ≤ `parallel_max`, judged 0–10 |
 | Token streaming + auto-stream | ✅ | SSE, per-request stream/batch |
+| GBNF auto-approved workflow | ✅ | Agent Loop: [THINK]/[BASH]/[READ]/[WRITE]/[DONE] |
 | Workspaces + file knowledge | ✅ | Chunk-embedded, per-workspace search |
 | Knowledge graph (wiki-links, tags, backlinks) | ✅ | pgvector + recursive-CTE shortest path |
 | Agents & skills (API/CLI/MCP) | ✅ | Runtime CRUD, JSON-persisted |
-| Multipage WebUI (Next.js) | ✅ | Landing `/` + live `/dashboard` + Agentic Terminal `/terminal` (CLI setup guide) |
+| Multipage WebUI (Next.js) | ✅ | Landing `/` + live `/dashboard` + Agentic Terminal `/terminal` |
 | Agentic Terminal | ✅ | Sandboxed shell / Python / file-tree, plus `/v1/terminal/*` HTTP API |
 | Image generation (Stable Diffusion) | ✅ opt-in | CPU, RAM-guarded, 256–512 px |
 | Vision (Gemma 3) | ✅ default-on | CPU, resource-guarded |
@@ -281,6 +282,9 @@ _matches(pred, target, exact):
 | Self-healing agent | ⚠️ gated | Diagnosis always; **execution** needs `--allow-unsafe-healing` |
 | OpenAI-compatible API | ✅ | Drop-in `/v1/chat/completions` |
 | Cloud fallback | ✅ opt-in | Rate-limited OpenAI/Claude/Groq/OpenRouter/Gemini |
+| Model management UI | ✅ | Pull from URL, install, uninstall, sizes |
+| Hardware monitor (SSE) | ✅ | 30s tick, LRU eviction, CPU throttle, `/v1/hardware/stream` |
+| CLI tab-completion + help | ✅ | Readline + Windows custom editor, categorized `/help` |
 
 ---
 
@@ -305,7 +309,7 @@ _matches(pred, target, exact):
 
 | | |
 |---|---|
-| **Strengths** | 100% local/private; multi-agent planning+judging; adaptive routing; knowledge graph; 759 automated tests; clean static audit; MIT + transparent. |
+| **Strengths** | 100% local/private; multi-agent planning+judging; adaptive routing; knowledge graph; 808 automated tests; clean static audit; MIT + transparent. |
 | **Weaknesses** | Small models → weaker than frontier LLMs; runs best on modest hardware (slow on CPU); vision/AutoML/image-gen are resource-heavy; some features Linux-only (AutoML). |
 | **Opportunities** | Drop-in OpenAI-compatible API; MCP integration; workspace knowledge; extensible agents/skills; easy to add new GGUF models; ideal for on-prem / air-gapped deployments. |
 | **Threats** | Upstream `llama.cpp`/transformers API drift; large-model competition; hardware fragmentation (Vulkan/ROCm/CUDA); supply-chain risk in optional deps. |
@@ -318,26 +322,32 @@ Legitimate question. Trust here is built on **verifiability, not authority**:
 
 - **Open source under MIT** — every line is inspectable; you can audit, fork and self-host.
 - **Reproducible** — `requirements.txt` / `pip install -e .` gives a deterministic local build.
-- **Tested** — **759 offline tests, 0 failures**, plus a full static audit (mypy, pyflakes,
+- **Tested** — **808 offline tests, 0 failures**, plus a full static audit (mypy, pyflakes,
   bandit, vulture, pydocstyle, ESLint) that is clean. Both run automatically in
   [GitHub Actions CI](.github/workflows/ci.yml) on every push.
 - **Transparent about limits** — known, non-critical issues are tracked publicly in
   [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md); nothing is hidden.
 - **Privacy by construction** — no telemetry; data stays on your device unless you opt in.
-- **Security-hardened** — the self-healing code-execution is gated, uploaded files are
-  served safely, and graph referential integrity is enforced (see below).
+- **Security-hardened** — the self-healing code-execution is gated, terminal shell
+  commands are sandboxed to the project directory, uploaded files are served safely, and
+  graph referential integrity is enforced (see below).
 - **Documented** — architecture, math, API and safety are all written down
-  ([AGENTS.md](AGENTS.md), [AUDIT_REPORT.md](AUDIT_REPORT.md)).
+  ([AGENTS.md](AGENTS.md), [AUDIT_REPORT.md](AUDIT_REPORT.md), [CHANGELOG.md](CHANGELOG.md),
+  [KNOWN_ISSUES.md](KNOWN_ISSUES.md)).
 
 > If you can read Python, you can verify every claim on this page yourself. That is the
 > point of local-first software.
 
 ---
 
-## 🔐 Security & hardening (v1.0.0)
+## 🔐 Security & hardening
 
 - **Self-healing RCE gate** — `heal()` refuses to run caller-supplied Python unless
   `--allow-unsafe-healing` is passed. `--healing` alone only enables diagnosis.
+- **Sandboxed shell commands (v1.2.1)** — `/v1/terminal/exec` rejects commands that escape
+  the project directory: `..` traversal (incl. spaced escapes), drive-absolute paths
+  (`C:\`), UNC paths, and absolute `cd`. Sandboxed `shell=True` subprocesses stay confined
+  to the project root.
 - **Stored XSS** — `/generated` is served by `SafeStaticFiles`: `X-Content-Type-Options:
   nosniff` and `Content-Disposition: attachment` for inline-dangerous types (`.html`,
   `.svg`, `.xml`, `.js`).
@@ -346,6 +356,8 @@ Legitimate question. Trust here is built on **verifiability, not authority**:
 - **Vision API** — switched to Gemma 3 (`google/gemma-3-4b-it`) processor-based
   generation; PaliGemma and the `moondream2` `answer_question` pipeline remain as
   fallback model paths. On by default; the model lazy-loads on first analysis.
+- **UTF-8-safe self-healing** — healing snippets are written as UTF-8 and the
+  `HealingRequest.timeout_s` API field is capped at 1–120 s.
 
 ---
 
@@ -383,13 +395,13 @@ This software is provided **"AS IS", without warranty of any kind** (see
 **Q: Can I trust an indie dev's AI with my data?**
 A: The app is local-first — no telemetry, and nothing leaves your machine unless you
 explicitly enable a cloud fallback or web search. You can read the entire codebase; the
-759-test suite and public audit let you verify behaviour yourself.
+808-test suite and public audit let you verify behaviour yourself.
 
 **Q: Is it free / can I use it commercially?**
 A: Yes. MIT licensed — free for personal and commercial use, with attribution.
 
 **Q: What if there are bugs?**
-A: 759 automated tests + a clean static audit cover the core; remaining non-critical
+A: 808 automated tests + a clean static audit cover the core; remaining non-critical
 items are listed transparently in `KNOWN_ISSUES.md`.
 
 **Q: Who is liable if the healing agent executes bad code?**
@@ -406,7 +418,7 @@ and parallel multi-model execution — none of which those tools provide.
 ## 🧪 Testing & quality
 
 ```bash
-python test_all.py          # 759 offline tests, 0 failures
+python test_all.py          # 808 offline tests, 0 failures
 python test_system.py 8070   # live integration tests
 python test_load.py --port 8070
 python run_deep_audit.py     # mypy + pyflakes + bandit + vulture + pydocstyle + ESLint
@@ -415,7 +427,7 @@ python run_deep_audit.py     # mypy + pyflakes + bandit + vulture + pydocstyle +
 | Check | Result |
 |-------|--------|
 | GitHub Actions CI | Python tests + Next.js build on every push (badge above) |
-| Unit tests | **759 / 759 passed** |
+| Unit tests | **808 / 808 passed** |
 | Pyflakes / Bandit / Vulture | clean |
 | TypeScript build | pass (13 routes) |
 | ESLint (frontend) | pass |

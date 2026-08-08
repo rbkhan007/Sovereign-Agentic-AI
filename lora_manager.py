@@ -80,11 +80,6 @@ def _discover_on_disk():
 _discover_on_disk()
 
 
-def get_adapter(name: str) -> Optional[LoRAAdapter]:
-    with _LORA_LOCK:
-        return _LORA_ADAPTERS.get(name)
-
-
 def list_adapters() -> List[LoRAAdapter]:
     with _LORA_LOCK:
         return list(_LORA_ADAPTERS.values())
@@ -141,7 +136,12 @@ def import_adapter(src_path: str, name: str = "") -> Optional[LoRAAdapter]:
         shutil.copytree(src_path, dest)
     else:
         shutil.copy2(src_path, dest)
-    adapter = LoRAAdapter(name=os.path.splitext(os.path.basename(dest))[0] if not os.path.isdir(dest) else os.path.basename(dest), path=dest)
+    adapter_name = (
+        os.path.splitext(os.path.basename(dest))[0]
+        if not os.path.isdir(dest)
+        else os.path.basename(dest)
+    )
+    adapter = LoRAAdapter(name=adapter_name, path=dest)
     register_adapter(adapter)
     logger.info(f"Imported LoRA adapter: {adapter.name}")
     return adapter
@@ -232,8 +232,9 @@ def train_lora(
         if has_cuda:
             model = prepare_model_for_kbit_training(model)
         else:
-            model = prepare_model_for_kbit_training(  # pylint: disable=unexpected-keyword-arg
-                model, use_cache=False)  # type: ignore[call-arg]
+            # CPU training: peft >= 0.7 removed use_cache from this function.
+            model = prepare_model_for_kbit_training(model)
+            model.config.use_cache = False
 
         peft_config = LoraConfig(
             r=lora_rank,

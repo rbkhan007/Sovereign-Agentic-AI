@@ -59,7 +59,7 @@ def _available_ram_mb() -> int:
 
 def _is_gemma(model_id: str) -> bool:
     m = model_id.lower()
-    return "gemma" in m or "paligemma" in m
+    return "gemma" in m and "paligemma" not in m
 
 
 def vision_config() -> dict:
@@ -98,10 +98,14 @@ def _load_model():
                 processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
                 model = AutoModelForImageTextToText.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
             except (ValueError, OSError, TypeError):
-                # Fall back for PaliGemma checkpoints exposed as a causal LM.
+                # Gemma-family checkpoint exposed as a causal LM.
                 from transformers import AutoModelForCausalLM  # noqa: PLC0415
                 processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
                 model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
+        elif "paligemma" in model_id.lower():
+            from transformers import AutoModelForCausalLM, AutoProcessor  # noqa: PLC0415
+            processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
+            model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
         else:
             from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: PLC0415
             processor = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)  # nosec B615
@@ -136,15 +140,17 @@ def _strip_prompt_prefix(answer: str, prompt: str) -> str:
 
 
 def _run_gemma_inference(img: Any, prompt: str, max_tokens: int) -> str:
-    """Gemma 3 / PaliGemma: processor + generate. Returns the decoded answer."""
+    """Gemma 3: processor + generate. Returns the decoded answer."""
     import torch  # noqa: PLC0415
     processor = _vision_processor
     model = _vision_model
-    if hasattr(processor, "apply_chat_template") and hasattr(processor, "image_processor"):
-        # Gemma 3 chat-style inputs.
+    if hasattr(processor, "apply_chat_template"):
+        # Gemma 3 chat-style inputs. The image must be supplied inline via the
+        # "image" content-block key so apply_chat_template builds pixel_values;
+        # an image-less block produces no images and the processor raises.
         messages = [{
             "role": "user",
-            "content": [{"type": "image"}, {"type": "text", "text": prompt}],
+            "content": [{"type": "image", "image": img}, {"type": "text", "text": prompt}],
         }]
         inputs = processor.apply_chat_template(
             messages,
@@ -155,7 +161,7 @@ def _run_gemma_inference(img: Any, prompt: str, max_tokens: int) -> str:
         )
         inputs = {k: v.to("cpu") for k, v in inputs.items() if hasattr(v, "to")}
     else:
-        # PaliGemma-style (images + text passed directly to the processor).
+        # Fallback: pass images + text directly to the processor.
         inputs = processor(images=img, text=prompt, return_tensors="pt")
         inputs = {k: v.to("cpu") for k, v in inputs.items() if hasattr(v, "to")}
     with torch.no_grad():
@@ -164,6 +170,20 @@ def _run_gemma_inference(img: Any, prompt: str, max_tokens: int) -> str:
         outputs = outputs[:, inputs["input_ids"].shape[1]:]
     answer = processor.decode(outputs[0], skip_special_tokens=True)
     return answer
+
+
+def _run_paligemma_inference(img: Any, prompt: str, max_tokens: int) -> str:
+    """PaliGemma-style (images + text passed directly to the processor)."""
+    import torch  # noqa: PLC0415
+    processor = _vision_processor
+    model = _vision_model
+    inputs = processor(images=img, text=prompt, return_tensors="pt")
+    inputs = {k: v.to("cpu") for k, v in inputs.items() if hasattr(v, "to")}
+    with torch.no_grad():
+        outputs = model.generate(**inputs, max_new_tokens=max_tokens, do_sample=False)
+    if "input_ids" in inputs:
+        outputs = outputs[:, inputs["input_ids"].shape[1]:]
+    return processor.decode(outputs[0], skip_special_tokens=True)
 
 
 def analyze_image(image: bytes, prompt: str = "Describe this image in detail.") -> dict:
@@ -191,8 +211,12 @@ def analyze_image(image: bytes, prompt: str = "Describe this image in detail.") 
             max_tokens = int((getattr(CONFIG, "vision", {}) or {}).get("max_tokens", 200))
             if _is_gemma(model_id):
                 answer = _run_gemma_inference(img, prompt, max_tokens)
+            elif "paligemma" in model_id.lower():
+                answer = _run_paligemma_inference(img, prompt, max_tokens)
             else:
-                answer = _vision_model.answer_question(img, prompt, _vision_processor)
+                # moondream2-style: encode the image first, then answer.
+                embeds = _vision_model.encode_image(img)
+                answer = _vision_model.answer_question(embeds, prompt, _vision_processor)
     except Exception as e:
         release()
         raise RuntimeError(f"Vision inference failed: {e}") from e

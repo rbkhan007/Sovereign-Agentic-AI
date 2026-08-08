@@ -11,6 +11,7 @@ import Switch from '@/components/ui/Switch';
 import Skeleton, { CardSkeleton } from '@/components/ui/Skeleton';
 import Badge from '@/components/ui/Badge';
 import PageHeader from '@/components/ui/PageHeader';
+import RangeSlider from '@/components/ui/RangeSlider';
 import { t } from '@/lib/i18n';
 import { RefreshCw, Server, Cpu, Gauge, Key, Shield, Eye, EyeOff, RotateCcw, Settings2 } from 'lucide-react';
 
@@ -40,6 +41,8 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [showAdminKey, setShowAdminKey] = useState(false);
+  const [adminKey, setAdminKey] = useState('');
   const { addToast } = useToast();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -329,11 +332,25 @@ export default function SettingsPage() {
       <Section title="Security" icon={<Shield size={20} />} description="Admin key and per-IP rate limiting">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Field label="Admin Key" hint="Required via X-Admin-Key for control-plane mutations (config, model load, agent/skill/LoRA writes)">
-            <Input
-              value={String(config.admin_key ? 'set' : '')}
-              disabled
-              placeholder="Set at startup via run.py --admin-key or LLM_ADMIN_KEY"
-            />
+            <div className="relative">
+              <Input
+                type={showAdminKey ? 'text' : 'password'}
+                value={adminKey}
+                onChange={e => setAdminKey(e.target.value)}
+                placeholder={String(config.admin_key ? 'Already set at startup' : 'Set at startup via run.py --admin-key or LLM_ADMIN_KEY')}
+                className="pr-10"
+                disabled={Boolean(config.admin_key)}
+              />
+              {!config.admin_key && (
+                <button
+                  type="button"
+                  onClick={() => setShowAdminKey(!showAdminKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary transition-colors"
+                >
+                  {showAdminKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              )}
+            </div>
           </Field>
           <Field label="Rate Limit (light/min)">
             <Input type="number" min="1" value={String((config.rate_limit as Record<string, unknown> | undefined)?.light_per_min ?? 120)} onChange={e => updateDebounced('rate_limit.light_per_min', parseInt(e.target.value))} />
@@ -372,16 +389,15 @@ export default function SettingsPage() {
                   {role && <Badge variant="brand" className="text-[10px]">{role}</Badge>}
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <Field label={t('settings.temperature')}>
-                    <Input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max="2"
-                      value={String(params.temperature ?? 0.7)}
-                      onChange={e => updateDebounced(`models.${name}.temperature`, parseFloat(e.target.value))}
-                    />
-                  </Field>
+                  <RangeSlider
+                    label={t('settings.temperature')}
+                    value={Number(params.temperature ?? 0.7)}
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    onChange={v => updateDebounced(`models.${name}.temperature`, v)}
+                    hint="Higher = more creative"
+                  />
                   <Field label={t('settings.maxTokens')}>
                     <Input
                       type="number"
@@ -398,16 +414,15 @@ export default function SettingsPage() {
                       onChange={e => updateDebounced(`models.${name}.n_ctx`, parseInt(e.target.value))}
                     />
                   </Field>
-                  <Field label={t('settings.topP')}>
-                    <Input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max="1"
-                      value={String(params.top_p ?? 0.9)}
-                      onChange={e => updateDebounced(`models.${name}.top_p`, parseFloat(e.target.value))}
-                    />
-                  </Field>
+                  <RangeSlider
+                    label={t('settings.topP')}
+                    value={Number(params.top_p ?? 0.9)}
+                    min={0}
+                    max={1}
+                    step={0.1}
+                    onChange={v => updateDebounced(`models.${name}.top_p`, v)}
+                    hint="Nucleus sampling"
+                  />
                 </div>
               </div>
             );
@@ -441,7 +456,7 @@ export default function SettingsPage() {
         <div className="mt-4 space-y-3">
           <Switch
             label="Parallel Generation"
-            checked={Boolean((config as Record<string, unknown>).parallel && typeof (config as Record<string, unknown>).parallel === 'object' && !!(config as Record<string, unknown>).parallel && (config as { parallel?: { enabled?: boolean } }).parallel?.enabled)}
+            checked={Boolean((config.parallel as Record<string, unknown> | undefined)?.enabled)}
             onChange={v => update('parallel.enabled', v)}
             hint="Generate responses from multiple models simultaneously"
           />

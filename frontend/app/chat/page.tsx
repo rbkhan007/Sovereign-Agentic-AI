@@ -1,28 +1,45 @@
-'use client';
+﻿'use client';
 
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { fetchJSON, toArray, toText, api, autoStreamChat, uploadChatFile, computerStream, ensureMsgId, type ModelItem, type ChatMessage, type Agent, type Skill, type Workspace, type StreamEvent, type ComputerToolEvent } from '@/lib/api';
+import { fetchJSON, toArray, toText, api, autoStreamChat, uploadChatFile, computerStream, workflowStream, ensureMsgId, type ModelItem, type ChatMessage, type Agent, type Skill, type Workspace, type StreamEvent, type ComputerToolEvent, type WorkflowEvent } from '@/lib/api';
 import { getStorage, setStorageValue, removeStorageValue } from '@/lib/storage';
 import { useToast } from '@/components/providers/ToastProvider';
 import { useTheme } from '@/components/ThemeProvider';
-import ThinkingIndicator from '@/components/ThinkingIndicator';
-import Select from '@/components/ui/Select';
-import Button from '@/components/ui/Button';
-import AutocompletePopover, { type AutocompleteItem } from '@/components/chat/AutocompletePopover';
+import ScrollToBottomButton from '@/components/chat/ScrollToBottomButton';
+import DragOverlay from '@/components/chat/DragOverlay';
+import FileChips from '@/components/chat/FileChips';
+import ContextChips from '@/components/chat/ContextChips';
+import ModesPopover from '@/components/chat/ModesPopover';
+import MessageBubble from '@/components/chat/MessageBubble';
+import Composer from '@/components/chat/Composer';
+import ChatHeader from '@/components/chat/ChatHeader';
+import MessagesArea from '@/components/chat/MessagesArea';
+import ChatSidebar from '@/components/chat/ChatSidebar';
+import MobileDrawer from '@/components/chat/MobileDrawer';
 import ImagePreviewModal from '@/components/chat/ImagePreviewModal';
+import ExportModal from '@/components/chat/ExportModal';
 import EmptyStateCards from '@/components/chat/EmptyStateCards';
 import MessageToolbar from '@/components/chat/MessageToolbar';
 import ConversationsPanel from '@/components/chat/ConversationsPanel';
-import ExportModal from '@/components/chat/ExportModal';
-import CodeBlock from '@/components/chat/CodeBlock';
 import ToolCallCard, { type ToolCall } from '@/components/chat/ToolCallCard';
+import AgentTrace, { type TraceAction } from '@/components/chat/AgentTrace';
+import ThinkingIndicator from '@/components/ThinkingIndicator';
+import MarkdownContent from '@/components/chat/MarkdownContent';
+import CodeBlock from '@/components/chat/CodeBlock';
+import Select from '@/components/ui/Select';
+import Button from '@/components/ui/Button';
+import AutocompletePopover, { type AutocompleteItem } from '@/components/chat/AutocompletePopover';
 import {
-  Send, Square, Trash2, Bot, User, Loader2, MessageSquare, Plus, X, Keyboard,
-  Download, Sparkles, Paperclip, FileImage, FileText, FileCode, ArrowDown, Mic, Globe, Brain,
-  Slash, AtSign, History, Terminal,
+  MessageSquare, Plus, X, History, Trash2, Square, Check, Slash,
+  FileText, Sparkles, Bot, Send, Keyboard, Loader2, ArrowDown, Mic, Globe, Brain,
+  User, Paperclip, FileImage, FileCode, SlidersHorizontal, AtSign, Download,
 } from 'lucide-react';
 import { t } from '@/lib/i18n';
+import {
+  MAX_TOKENS, estimateTokens, stripMarkdown, getTrigger, formatBytes,
+  SLASH_COMMANDS, type SlashCommand, type ContextChip,
+} from '@/lib/chatUtils';
 
 const STORAGE_KEYS = {
   model: 'chat_model',
@@ -31,94 +48,6 @@ const STORAGE_KEYS = {
   convId: 'chat_conv_id',
 };
 
-const MAX_TOKENS = 4096;
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
-function stripMarkdown(md: string): string {
-  return md
-    .replace(/```[\s\S]*?```/g, (m) => m.replace(/```\w*\n?/, '').replace(/```/, ''))
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/[*_~>#]/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function getTrigger(value: string, caret: number): { type: 'slash' | 'mention'; query: string } | null {
-  const before = value.slice(0, caret);
-  const m = /(^|\s)([/@])(\S*)$/.exec(before);
-  if (!m) return null;
-  return { type: m[2] === '/' ? 'slash' : 'mention', query: m[3] };
-}
-
-interface SlashCommand {
-  id: string;
-  label: string;
-  description: string;
-  hint?: string;
-  action: 'clear' | 'compact' | 'review' | 'test' | 'model' | 'help';
-}
-
-const SLASH_COMMANDS: SlashCommand[] = [
-  { id: '/clear', label: '/clear', description: 'Clear the current conversation', hint: '⌫', action: 'clear' },
-  { id: '/compact', label: '/compact', description: 'Compress conversation context', action: 'compact' },
-  { id: '/review', label: '/review', description: 'Review code & show a diff', action: 'review' },
-  { id: '/test', label: '/test', description: 'Generate unit tests', action: 'test' },
-  { id: '/model', label: '/model', description: 'Switch the active model', action: 'model' },
-  { id: '/help', label: '/help', description: 'Show available commands', hint: '?', action: 'help' },
-];
-
-interface ContextChip {
-  id: string;
-  label: string;
-  kind: 'file' | 'agent' | 'skill' | 'web';
-}
-
-function MarkdownContent({ content }: { content: string }) {
-  const { theme } = useTheme();
-  return (
-    <div className={`prose max-w-none prose-sm ${theme === 'dark' ? 'prose-invert' : ''}`}>
-      <ReactMarkdown
-        components={{
-          code({ className, children, ...props }) {
-            const match = /language-(\w+)/.exec(className || '');
-            const codeString = String(children).replace(/\n$/, '');
-            const isInline = !match && !codeString.includes('\n');
-            if (isInline) {
-              return <code className="bg-bg-tertiary px-1.5 py-0.5 rounded text-accent text-xs font-mono" {...props}>{children}</code>;
-            }
-            return <CodeBlock code={codeString} language={match?.[1] || 'text'} />;
-          },
-          p({ children }) {
-            return <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>;
-          },
-          ul({ children }) {
-            return <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>;
-          },
-          ol({ children }) {
-            return <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>;
-          },
-          a({ href, children }) {
-            return <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent hover:text-accent-hover underline underline-offset-2">{children}</a>;
-          },
-        }}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
-}
 
 export default function ChatPage() {
   const [models, setModels] = useState<ModelItem[]>([]);
@@ -148,10 +77,32 @@ export default function ChatPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [exportTarget, setExportTarget] = useState<{ title: string; messages: ChatMessage[]; convId?: string } | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+
+  // Modes popover (stream / auto / agentic / planning)
+  const [modesOpen, setModesOpen] = useState(false);
+  const modesRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!modesOpen) return;
+    function onClick(e: MouseEvent) {
+      if (modesRef.current && !modesRef.current.contains(e.target as Node)) setModesOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setModesOpen(false);
+    }
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [modesOpen]);
 
   // Agentic tools mode (computer agent)
   const [agenticTools, setAgenticTools] = useState(false);
+  const [codeAgent, setCodeAgent] = useState(false);
   const [liveToolCalls, setLiveToolCalls] = useState<ToolCall[]>([]);
+  const [liveActions, setLiveActions] = useState<TraceAction[]>([]);
   const [agenticActive, setAgenticActive] = useState(false);
   const nextToolId = useRef(0);
 
@@ -207,7 +158,7 @@ export default function ChatPage() {
   useEffect(() => {
     const urls = files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : ''));
     setPreviewUrls(urls);
-    return () => urls.forEach((u) => u && URL.revokeObjectURL(u));
+    return () => urls.filter(Boolean).forEach((u) => URL.revokeObjectURL(u));
   }, [files]);
 
   const refreshModels = async () => {
@@ -230,9 +181,9 @@ export default function ChatPage() {
     const savedModel = getStorage<string>(STORAGE_KEYS.model, '');
     const savedWorkspace = getStorage<string>(STORAGE_KEYS.workspace, '');
     const savedMessages = getStorage<ChatMessage[]>(STORAGE_KEYS.messages, []);
-    const urlConvId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('conv') : '';
+    const urlConvId = new URLSearchParams(window.location.search).get('conv') || '';
     const savedConvId = urlConvId || getStorage<string>(STORAGE_KEYS.convId, '');
-    const urlAgent = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('agent') : '';
+    const urlAgent = new URLSearchParams(window.location.search).get('agent') || '';
 
     let mounted = true;
     async function load() {
@@ -386,9 +337,11 @@ export default function ChatPage() {
   }, []);
 
   async function clearChat() {
-    if (!window.confirm('Are you sure you want to clear the current conversation? This cannot be undone.')) {
+    if (pendingAction !== 'clear') {
+      setPendingAction('clear');
       return;
     }
+    setPendingAction(null);
     await doClearChat();
   }
 
@@ -408,7 +361,11 @@ export default function ChatPage() {
   }
 
   async function deleteConversation(id: string) {
-    if (!window.confirm('Delete this conversation?')) return;
+    if (pendingAction !== `delete-${id}`) {
+      setPendingAction(`delete-${id}`);
+      return;
+    }
+    setPendingAction(null);
     try {
       await fetchJSON(`/v1/chat/conversations?conv_id=${encodeURIComponent(id)}&workspace_id=${encodeURIComponent(selectedWorkspace || 'default')}`, {
         method: 'DELETE',
@@ -428,7 +385,11 @@ export default function ChatPage() {
   }
 
   async function clearAllConversations() {
-    if (!window.confirm('Clear all conversations in this workspace?')) return;
+    if (pendingAction !== 'clear-all') {
+      setPendingAction('clear-all');
+      return;
+    }
+    setPendingAction(null);
     try {
       const qs = `?workspace_id=${encodeURIComponent(selectedWorkspace || 'default')}`;
       await fetchJSON(`/v1/chat/clear${qs}`, { method: 'POST' });
@@ -476,6 +437,7 @@ export default function ChatPage() {
       if (autoStreaming) {
         setMessages([...history.map(ensureMsgId), ensureMsgId({ role: 'assistant', content: '' })]);
         let assistantText = '';
+        let assistantModel: string | undefined;
         await autoStreamChat(
           history.map((m) => ({ role: m.role, content: m.content })),
           selectedModel,
@@ -487,6 +449,7 @@ export default function ChatPage() {
               setThinkingText(evt.content);
             } else if (evt.type === 'response' && typeof evt.content === 'string') {
               assistantText += evt.content;
+              if (evt.model) assistantModel = evt.model;
               setMessages(prev => {
                 const next = [...prev];
                 const last = next[next.length - 1];
@@ -497,7 +460,7 @@ export default function ChatPage() {
           },
           controller.signal,
         );
-        const finalMessages: ChatMessage[] = [...history, { role: 'assistant', content: assistantText }];
+        const finalMessages: ChatMessage[] = [...history, { role: 'assistant', content: assistantText, model: assistantModel || selectedModel || undefined }];
         persistMessages(finalMessages);
       } else if (streaming) {
         const res = await api('/v1/chat/stream', {
@@ -509,6 +472,7 @@ export default function ChatPage() {
         if (!reader) throw new Error('No stream');
         const decoder = new TextDecoder();
         let assistantText = '';
+        let assistantModel: string | undefined;
         let buffer = '';
         setMessages([...history.map(ensureMsgId), ensureMsgId({ role: 'assistant', content: '' })]);
         while (true) {
@@ -526,6 +490,7 @@ export default function ChatPage() {
               const evt = JSON.parse(payload);
               if (evt.type === 'response' && typeof evt.content === 'string') {
                 assistantText += evt.content;
+                if (evt.model) assistantModel = evt.model;
                 setMessages(prev => {
                   const next = [...prev];
                   const last = next[next.length - 1];
@@ -534,13 +499,14 @@ export default function ChatPage() {
                 });
               } else if (evt.type === 'thinking' && typeof evt.content === 'string') {
                 setThinking(true);
+                setThinkingText(evt.content);
               } else if (evt.type === 'start') {
                 setThinking(true);
               }
             } catch { /* ignore malformed frames */ }
           }
         }
-        const finalMessages: ChatMessage[] = [...history.map(ensureMsgId), ensureMsgId({ role: 'assistant', content: assistantText })];
+        const finalMessages: ChatMessage[] = [...history.map(ensureMsgId), ensureMsgId({ role: 'assistant', content: assistantText, model: assistantModel || selectedModel || undefined })];
         persistMessages(finalMessages);
       } else {
         const data = await fetchJSON('/v1/chat/completions', {
@@ -550,7 +516,7 @@ export default function ChatPage() {
         });
         const choice = (data as { choices?: { message?: ChatMessage }[] }).choices?.[0]?.message;
         if (choice) {
-          const assistantMsg: ChatMessage = ensureMsgId({ role: choice.role, content: toText(choice.content) });
+          const assistantMsg: ChatMessage = ensureMsgId({ role: choice.role, content: toText(choice.content), model: (data as { model?: string }).model || selectedModel || undefined });
           const finalMessages = [...history.map(ensureMsgId), assistantMsg];
           persistMessages(finalMessages);
         }
@@ -604,46 +570,119 @@ export default function ChatPage() {
     setThinking(true);
     setAgenticActive(true);
     setLiveToolCalls([]);
+    setLiveActions([]);
     nextToolId.current = 0;
 
     setMessages([...history, { role: 'assistant', content: '' }]);
 
     let assistantText = '';
     try {
-      await computerStream(
-        goalMsg.content,
-        { sandbox: false, maxSteps: 25 },
-        (evt: ComputerToolEvent) => {
-          if (evt.type === 'thinking' && typeof evt.content === 'string') {
-            setThinking(true);
-            setThinkingText((prev) => prev + evt.content);
-          } else if (evt.type === 'tool_call') {
-            const id = ++nextToolId.current;
-            setLiveToolCalls((prev) => [...prev, {
-              id,
-              tool: evt.tool || 'tool',
-              args: evt.args,
-              status: evt.success ? 'success' : 'failed',
-              output: evt.result,
-              elapsed: evt.elapsed,
-              step: evt.step,
-            }]);
-          } else if (evt.type === 'complete') {
-            assistantText = evt.answer || '';
-            setThinking(false);
-            setThinkingText('');
-            setMessages((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-              next[next.length - 1] = { ...last, role: 'assistant', content: assistantText };
-              return next;
-            });
-          }
-        },
-        controller.signal,
-      );
-        const finalMessages: ChatMessage[] = [...history.map(ensureMsgId), ensureMsgId({ role: 'assistant', content: assistantText })];
-        persistMessages(finalMessages);
+      if (selectedAgent === 'agent_x') {
+        await workflowStream(
+          goalMsg.content,
+          { workspace: selectedWorkspace || 'default', maxSteps: 25, model: selectedModel },
+          (evt: WorkflowEvent) => {
+            if (evt.type === 'status' && typeof evt.message === 'string') {
+              setThinking(true);
+              setThinkingText(evt.message);
+            } else if (evt.type === 'trace') {
+              if (!evt.action) return;
+              const actionUpper = evt.action.toUpperCase();
+              const id = ++nextToolId.current;
+              setLiveActions((prev) => [...prev, {
+                id,
+                action: actionUpper,
+                payload: evt.content || evt.path || '',
+                status: 'running',
+                step: evt.step,
+              }]);
+              if (evt.success === false || evt.action) {
+                setLiveActions((prev) => {
+                  const next = [...prev];
+                  for (let i = next.length - 1; i >= 0; i--) {
+                    if (next[i].status === 'running') {
+                      next[i] = {
+                        ...next[i],
+                        status: evt.success === false ? 'failed' : 'success',
+                        elapsed: evt.elapsed_s,
+                      };
+                      break;
+                    }
+                  }
+                  return next;
+                });
+              }
+            } else if (evt.type === 'complete') {
+              assistantText = evt.result || evt.content || '';
+              setThinking(false);
+              setThinkingText('');
+              setLiveActions((prev) => prev.map((a) => a.status === 'running' ? { ...a, status: 'success' } : a));
+              setMessages((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                next[next.length - 1] = { ...last, role: 'assistant', content: assistantText };
+                return next;
+              });
+            }
+          },
+          controller.signal,
+        );
+      } else {
+        await computerStream(
+          goalMsg.content,
+          { sandbox: false, maxSteps: 25, protocol: codeAgent ? 'actions' : 'json' },
+          (evt: ComputerToolEvent) => {
+            if (evt.type === 'thinking' && typeof evt.content === 'string') {
+              setThinking(true);
+              setThinkingText((prev) => prev + evt.content);
+            } else if (evt.type === 'action') {
+              const id = ++nextToolId.current;
+              setLiveActions((prev) => [...prev, {
+                id,
+                action: evt.action || 'STEP',
+                payload: evt.payload || '',
+                status: 'running',
+                step: evt.step,
+              }]);
+            } else if (evt.type === 'tool_call') {
+              const id = ++nextToolId.current;
+              setLiveToolCalls((prev) => [...prev, {
+                id,
+                tool: evt.tool || 'tool',
+                args: evt.args,
+                status: evt.success ? 'success' : 'failed',
+                output: evt.result,
+                elapsed: evt.elapsed,
+                step: evt.step,
+              }]);
+              setLiveActions((prev) => {
+                const next = [...prev];
+                for (let i = next.length - 1; i >= 0; i--) {
+                  if (next[i].status === 'running') {
+                    next[i] = { ...next[i], status: evt.success ? 'success' : 'failed', elapsed: evt.elapsed };
+                    break;
+                  }
+                }
+                return next;
+              });
+            } else if (evt.type === 'complete') {
+              assistantText = evt.answer || '';
+              setThinking(false);
+              setThinkingText('');
+              setLiveActions((prev) => prev.map((a) => a.status === 'running' ? { ...a, status: 'success' } : a));
+              setMessages((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                next[next.length - 1] = { ...last, role: 'assistant', content: assistantText };
+                return next;
+              });
+            }
+          },
+          controller.signal,
+        );
+      }
+      const finalMessages: ChatMessage[] = [...history.map(ensureMsgId), ensureMsgId({ role: 'assistant', content: assistantText, model: selectedModel || undefined })];
+      persistMessages(finalMessages);
       addToast('Agent run complete', 'success');
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
@@ -654,10 +693,12 @@ export default function ChatPage() {
       setThinking(false);
       setThinkingText('');
       setAgenticActive(false);
+      setLiveToolCalls([]);
+      setLiveActions([]);
       abortControllerRef.current = null;
       setContextChips([]);
     }
-  }, [sending, modelLoading, thinking, uploading, selectedModel, models, persistMessages, addToast]);
+  }, [sending, modelLoading, thinking, uploading, selectedModel, models, codeAgent, selectedAgent, selectedWorkspace, persistMessages, addToast]);
 
   async function sendMessage() {
     const trimmedInput = input.trim();
@@ -716,6 +757,7 @@ export default function ChatPage() {
       setThinkingText('');
       setAgenticActive(false);
       setLiveToolCalls([]);
+      setLiveActions([]);
     }
   }
 
@@ -795,7 +837,7 @@ export default function ChatPage() {
         addToast('Pick a model from the toolbar selector above', 'success');
         break;
       case 'help':
-        addToast('Commands: /clear · /compact · /review · /test · /model · /help', 'success');
+        addToast('Commands: /clear Â· /compact Â· /review Â· /test Â· /model Â· /help', 'success');
         break;
     }
   }
@@ -886,12 +928,13 @@ export default function ChatPage() {
   }
   function getMentionQuery(): string {
     const trigger = getTrigger(input, inputRef.current?.selectionStart ?? input.length);
-    return trigger?.type === 'mention' ? trigger.query.toLowerCase().toLowerCase() : '';
+    return trigger?.type === 'mention' ? trigger.query.toLowerCase() : '';
   }
 
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    if (e.target.files && e.target.files.length > 0) {
-      setFiles((prev) => [...prev, ...Array.from(e.target.files!)]);
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      setFiles((prev) => [...prev, ...Array.from(files)]);
     }
     e.target.value = '';
   }
@@ -1022,7 +1065,7 @@ export default function ChatPage() {
   function branchConversation() {
     setConvId('');
     removeStorageValue(STORAGE_KEYS.convId);
-    addToast('Branched — next send starts a new conversation', 'success');
+    addToast('Branched â€” next send starts a new conversation', 'success');
   }
 
   function regenerateFrom(index: number) {
@@ -1062,8 +1105,8 @@ export default function ChatPage() {
   return (
     <div className="flex h-full">
       <div className="flex-1 flex flex-col min-w-0 relative">
-        <div className="px-5 py-3 border-b border-border bg-bg-secondary/60 backdrop-blur-md">
-          <div className="flex items-center justify-between mb-3">
+        <div className="px-4 py-3 border-b border-border bg-bg-secondary/60 backdrop-blur-md">
+          <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-accent to-accent-2 flex items-center justify-center text-white shadow-lg shadow-accent/25 shrink-0">
                 <MessageSquare size={16} />
@@ -1085,21 +1128,30 @@ export default function ChatPage() {
             <div className="flex items-center gap-2 shrink-0">
               {selectedModel && (
                 <>
-                  <div className="hidden sm:flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-full border border-border bg-bg-tertiary/60" title={`${selectedModel} · ${modelLoaded ? 'loaded' : 'not loaded'}`}>
+                  <div className="hidden sm:flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-full border border-border bg-bg-tertiary/60" title={`${selectedModel} Â· ${modelLoaded ? 'loaded' : 'not loaded'}${Array.isArray(activeModel?.capabilities) && activeModel.capabilities.length ? ' Â· ' + activeModel.capabilities.slice(0, 3).join(', ') : ''}`}>
                     <span className={`w-2 h-2 rounded-full ${modelLoaded ? 'bg-success shadow-[0_0_6px] shadow-success/70' : 'bg-text-muted'}`} />
                     <span className="text-text-secondary">{modelLoaded ? 'Warm' : 'Cold'}</span>
-                    {modelCtx && <span className="text-text-muted">· {modelCtx} ctx</span>}
-                    <span className="text-text-muted capitalize hidden lg:inline">· {activeModel?.role || 'model'}</span>
+                    {modelCtx && <span className="text-text-muted">Â· {modelCtx} ctx</span>}
+                    <span className="text-text-muted capitalize hidden lg:inline">Â· {activeModel?.role || 'model'}</span>
+                    {Array.isArray(activeModel?.capabilities) && activeModel.capabilities.length ? <span className="text-text-muted hidden lg:inline">Â· {activeModel.capabilities[0]}</span> : null}
                   </div>
                   <div className="hidden md:flex items-center gap-1 text-[11px] px-2.5 py-1.5 rounded-full border border-border bg-bg-tertiary/60 text-text-secondary font-mono" title="Estimated session token usage & cost">
                     <span>{sessionCost < 0.01 ? `$${sessionCost.toFixed(4)}` : `$${sessionCost.toFixed(2)}`}</span>
-                    <span className="text-text-muted">· {(sessionTokens / 1000).toFixed(1)}k tok</span>
+                    <span className="text-text-muted">Â· {(sessionTokens / 1000).toFixed(1)}k tok</span>
                   </div>
                 </>
               )}
               <button
+                onClick={createNewChat}
+                className="flex items-center gap-1.5 p-2 rounded-xl text-text-secondary hover:text-accent hover:bg-accent/10 transition-colors text-xs font-medium"
+                title={t('chat.newChat')}
+              >
+                <Plus size={16} />
+                <span className="hidden sm:inline">New</span>
+              </button>
+              <button
                 onClick={() => setDrawerOpen(true)}
-                className="xl:hidden p-2 rounded-lg text-text-secondary hover:text-accent hover:bg-accent/10 transition-colors"
+                className="xl:hidden p-2 rounded-xl text-text-secondary hover:text-accent hover:bg-accent/10 transition-colors"
                 title="Conversation history"
                 aria-label="Open history"
               >
@@ -1110,14 +1162,22 @@ export default function ChatPage() {
                   <Square size={12} /> Stop
                 </Button>
               )}
-              <Button variant="secondary" size="sm" onClick={clearChat} className="!py-1.5 !px-2.5 gap-1">
-                <Trash2 size={14} />
-                <span className="hidden sm:inline">{t('chat.clear')}</span>
-              </Button>
+              {pendingAction === 'clear' ? (
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-text-secondary">Confirm?</span>
+                  <Button variant="danger" size="sm" onClick={clearChat} className="!py-1.5 !px-2.5 gap-1 text-xs">Yes</Button>
+                  <Button variant="secondary" size="sm" onClick={() => setPendingAction(null)} className="!py-1.5 !px-2.5 gap-1 text-xs">No</Button>
+                </div>
+              ) : (
+                <Button variant="secondary" size="sm" onClick={clearChat} className="!py-1.5 !px-2.5 gap-1">
+                  <Trash2 size={14} />
+                  <span className="hidden sm:inline">{t('chat.clear')}</span>
+                </Button>
+              )}
             </div>
           </div>
 
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
+          <div className="flex items-center gap-2 mt-2.5 overflow-x-auto pb-0.5 scrollbar-thin">
             <Select
               label=""
               value={selectedModel}
@@ -1148,31 +1208,51 @@ export default function ChatPage() {
               options={workspaces.map((w) => ({ value: w.id, label: w.name }))}
               className="!w-auto min-w-[140px]"
             />
-            <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer whitespace-nowrap rounded-lg px-2 py-1.5 hover:bg-bg-tertiary transition-colors">
-              <input id="chat-stream" type="checkbox" checked={streaming} onChange={(e) => setStreaming(e.target.checked)} className="accent-accent" />
-              {t('chat.stream')}
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer whitespace-nowrap rounded-lg px-2 py-1.5 hover:bg-bg-tertiary transition-colors" title="Automatically pick streaming vs batch; streams thinking in real-time">
-              <input id="chat-auto-stream" type="checkbox" checked={autoStreaming} onChange={(e) => setAutoStreaming(e.target.checked)} className="accent-accent" />
-              <Sparkles size={12} className="text-accent-2" />
-              Auto
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer whitespace-nowrap rounded-lg px-2 py-1.5 hover:bg-bg-tertiary transition-colors" title="Route through the computer agent — shows real terminal-style tool-call traces">
-              <input id="chat-agentic" type="checkbox" checked={agenticTools} onChange={(e) => setAgenticTools(e.target.checked)} className="accent-accent" />
-              <Terminal size={12} className={agenticTools ? 'text-accent' : 'text-text-muted'} />
-              Agentic
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer whitespace-nowrap rounded-lg px-2 py-1.5 hover:bg-bg-tertiary transition-colors" title="Press Enter to send, Shift+Enter for newline">
-              <Keyboard size={12} />
-              <span className="hidden sm:inline">Enter to send</span>
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer whitespace-nowrap rounded-lg px-2 py-1.5 hover:bg-bg-tertiary transition-colors">
-              <input id="chat-planning" type="checkbox" checked={planning} onChange={(e) => setPlanning(e.target.checked)} className="accent-accent" />
-              <Sparkles size={12} className="text-accent" />
-              {t('chat.planning')}
-            </label>
+            <div className="relative shrink-0" ref={modesRef}>
+              <button
+                onClick={() => setModesOpen((v) => !v)}
+                className={`flex items-center gap-1.5 text-xs rounded-xl px-2.5 py-1.5 border transition-colors whitespace-nowrap ${
+                  modesOpen || planning || streaming || autoStreaming || agenticTools || codeAgent
+                    ? 'border-accent/30 text-accent bg-accent/10'
+                    : 'border-border text-text-secondary hover:bg-bg-tertiary'
+                }`}
+                aria-expanded={modesOpen}
+              >
+                <SlidersHorizontal size={13} />
+                <span className="hidden sm:inline">Modes</span>
+                {(planning || streaming || autoStreaming || agenticTools || codeAgent) && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+                )}
+              </button>
+              {modesOpen && (
+                <div className="absolute left-0 top-full mt-1.5 w-60 glass-card p-1.5 z-30 animate-fade-in rounded-xl">
+                  <div className="px-2 pt-1 pb-1.5 text-[10px] uppercase tracking-wider text-text-muted font-semibold">Generation modes</div>
+                  {[
+                    { key: 'stream', label: t('chat.stream'), checked: streaming, set: setStreaming, desc: 'Stream tokens in real time' },
+                    { key: 'auto', label: 'Auto stream', checked: autoStreaming, set: setAutoStreaming, desc: 'Auto-pick streaming vs batch; live thinking' },
+                    { key: 'agentic', label: 'Agentic', checked: agenticTools, set: setAgenticTools, desc: 'Computer agent with tool-call traces' },
+                    { key: 'code', label: 'Code Agent', checked: codeAgent, set: (v: boolean) => { setCodeAgent(v); if (v) setAgenticTools(true); }, desc: 'GBNF-forced [BASH]/[READ]/[WRITE]/[DONE] loop + auto env scan' },
+                    { key: 'planning', label: t('chat.planning'), checked: planning, set: setPlanning, desc: 'Strategist drafts a plan first' },
+                  ].map((m) => (
+                    <label key={m.key} className="flex items-start gap-2.5 rounded-xl px-2 py-1.5 cursor-pointer hover:bg-bg-tertiary transition-colors" title={m.desc}>
+                      <input
+                        type="checkbox"
+                        checked={m.checked}
+                        onChange={(e) => m.set(e.target.checked)}
+                        className="accent-accent mt-0.5 shrink-0"
+                      />
+                      <span className="flex flex-col min-w-0">
+                        <span className="text-xs font-medium text-text-primary">{m.label}</span>
+                        <span className="text-[10px] text-text-muted leading-snug">{m.desc}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-1.5 pt-1 flex-wrap">
+
+          <div className="flex items-center gap-1.5 pt-1.5 flex-wrap">
             <span className="text-[10px] uppercase tracking-wider text-text-muted mr-0.5 hidden sm:inline">Quick</span>
             {(['compact', 'review', 'clear'] as const).map((a) => (
               <button
@@ -1196,39 +1276,8 @@ export default function ChatPage() {
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
-          {isDragging && (
-            <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg-primary/85 backdrop-blur-sm">
-              <div className="dropzone-overlay border-2 border-dashed rounded-3xl m-6 w-[calc(100%-3rem)] h-[calc(100%-3rem)] flex items-center justify-center pointer-events-none">
-                <div className="text-center">
-                  <Paperclip size={48} className="text-accent mx-auto mb-3 animate-bounce" />
-                  <p className="text-xl font-semibold gradient-text">Drop files to attach</p>
-                  <p className="text-sm text-text-muted mt-1">Images, Markdown, Code, and Text files</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {files.length > 0 && (
-            <div className="flex flex-wrap gap-2 p-3 bg-bg-secondary/60 border border-border rounded-xl animate-fade-in">
-              {files.map((file, i) => (
-                <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 bg-bg-tertiary/80 rounded-xl border border-border text-sm group/file">
-                  {file.type.startsWith('image/') && previewUrls[i] ? (
-                    <button onClick={() => setPreviewImage({ url: previewUrls[i], name: file.name })} className="shrink-0" title="Preview image">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={previewUrls[i]} alt={file.name} className="w-9 h-9 rounded-lg object-cover border border-border" />
-                    </button>
-                  ) : (
-                    getFileIcon(file)
-                  )}
-                  <span className="max-w-[140px] truncate">{file.name}</span>
-                  <span className="text-[10px] text-text-muted font-mono">{formatBytes(file.size)}</span>
-                  <button onClick={() => removeFile(i)} className="text-text-muted hover:text-danger transition-colors ml-1" aria-label="Remove file">
-                    <X size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+          <DragOverlay visible={isDragging} />
+          <FileChips files={files} previewUrls={previewUrls} onRemove={removeFile} onPreviewImage={(url, name) => setPreviewImage({ url, name })} />
 
           {messages.length === 0 && !thinking && (
             <EmptyStateCards onSelect={onEmptyCardSelect} />
@@ -1252,6 +1301,9 @@ export default function ChatPage() {
                 <div className="flex items-center justify-between gap-3 mb-1.5">
                   <span className="text-xs font-medium opacity-80">
                     {msg.role === 'user' ? 'You' : 'Assistant'}
+                    {msg.role === 'assistant' && msg.model && (
+                      <span className="text-text-muted opacity-90 font-normal ml-1.5">Â· {msg.model}</span>
+                    )}
                   </span>
                   <MessageToolbar
                     role={msg.role === 'system' ? 'assistant' : msg.role}
@@ -1272,7 +1324,7 @@ export default function ChatPage() {
                     <textarea
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
-                      className="w-full bg-bg-primary/80 border border-accent/40 rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none resize-none"
+                      className="w-full bg-bg-primary/80 border border-accent/40 rounded-xl px-3 py-2 text-sm text-text-primary focus:outline-none resize-none"
                       rows={3}
                       autoFocus
                     />
@@ -1304,6 +1356,10 @@ export default function ChatPage() {
             </div>
           ))}
 
+          {codeAgent && (agenticActive || liveActions.length > 0) && (
+            <AgentTrace actions={liveActions} active={agenticActive} />
+          )}
+
           {thinking && (
             autoStreaming || thinkingText ? (
               <ThinkingIndicator isThinking={thinking} thoughtText={thinkingText || undefined} />
@@ -1332,15 +1388,7 @@ export default function ChatPage() {
           <div ref={chatEndRef} />
         </div>
 
-        {!atBottom && (
-          <button
-            onClick={scrollToBottom}
-            className="absolute bottom-28 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3.5 py-2 rounded-full bg-accent text-white shadow-lg shadow-accent/30 hover:bg-accent-hover transition-all animate-fade-in"
-          >
-            <ArrowDown size={15} />
-            {newMessageCount > 0 && <span className="text-xs font-medium">{newMessageCount} new</span>}
-          </button>
-        )}
+        <ScrollToBottomButton visible={!atBottom} onClick={scrollToBottom} newMessageCount={newMessageCount} />
 
         <div className="px-5 py-4 border-t border-border bg-bg-secondary/60 backdrop-blur-md">
           <div className="max-w-4xl mx-auto relative">
@@ -1377,11 +1425,11 @@ export default function ChatPage() {
               </div>
             )}
 
-            <div className={`flex gap-2.5 items-end rounded-2xl border bg-bg-primary/80 px-2 py-2 transition-all ${
-              composerFocused ? 'border-accent/40 shadow-accent/10' : 'border-border'
+            <div className={`flex gap-1.5 items-end rounded-2xl border bg-bg-primary/90 px-2 py-2 transition-all ${
+              composerFocused ? 'border-accent/50 shadow-lg shadow-accent/10 ring-1 ring-accent/20' : 'border-border hover:border-text-muted/30'
             }`}>
               <label className="cursor-pointer p-2.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-xl transition-all shrink-0" title={t('chat.attachFiles')}>
-                <Paperclip size={20} />
+                <Paperclip size={19} />
                 <input type="file" multiple className="hidden" onChange={handleFileSelect} disabled={sending || uploading} />
               </label>
               <textarea
@@ -1393,32 +1441,32 @@ export default function ChatPage() {
                 onBlur={() => setComposerFocused(false)}
                 placeholder={t('chat.placeholder')}
                 rows={1}
-                className="flex-1 bg-transparent border-0 px-1 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none resize-none max-h-48"
+                className="flex-1 bg-transparent border-0 px-1 py-3 text-sm text-text-primary placeholder:text-text-muted focus:outline-none resize-none max-h-48"
                 disabled={sending || uploading}
               />
-              <div className="flex items-center gap-1 shrink-0 pb-1">
+              <div className="flex items-center gap-0.5 shrink-0 pb-1">
                 <button
                   onClick={listening ? stopVoiceInput : startVoiceInput}
-                  className={`p-2 rounded-xl transition-all ${listening ? 'text-danger bg-danger/10 animate-pulse' : 'text-text-muted hover:text-accent hover:bg-accent/10'}`}
+                  className={`p-2.5 rounded-xl transition-all ${listening ? 'text-danger bg-danger/10 animate-pulse' : 'text-text-muted hover:text-accent hover:bg-accent/10'}`}
                   title={listening ? 'Stop voice input' : 'Voice input'}
                 >
                   <Mic size={18} />
                 </button>
                 <button
                   onClick={toggleWebSearch}
-                  className={`p-2 rounded-xl transition-all ${contextChips.some((c) => c.kind === 'web') ? 'text-accent bg-accent/10' : 'text-text-muted hover:text-accent hover:bg-accent/10'}`}
+                  className={`p-2.5 rounded-xl transition-all ${contextChips.some((c) => c.kind === 'web') ? 'text-accent bg-accent/10' : 'text-text-muted hover:text-accent hover:bg-accent/10'}`}
                   title="Toggle web search context"
                 >
                   <Globe size={18} />
                 </button>
                 <button
                   onClick={() => setPlanning((p) => !p)}
-                  className={`p-2 rounded-xl transition-all ${planning ? 'text-accent bg-accent/10' : 'text-text-muted hover:text-accent hover:bg-accent/10'}`}
+                  className={`p-2.5 rounded-xl transition-all ${planning ? 'text-accent bg-accent/10' : 'text-text-muted hover:text-accent hover:bg-accent/10'}`}
                   title="Deep thinking mode"
                 >
                   <Brain size={18} />
                 </button>
-                <Button onClick={sendMessage} disabled={sending || uploading || (!input.trim() && files.length === 0)} className="!px-3.5 !py-2.5 bg-gradient-to-r from-accent to-accent-2 hover:from-accent-hover hover:to-accent-2/80">
+                <Button onClick={sendMessage} disabled={sending || uploading || (!input.trim() && files.length === 0)} className="!px-3.5 !py-2.5 ml-1 bg-gradient-to-r from-accent to-accent-2 hover:from-accent-hover hover:to-accent-2/80 shadow-md shadow-accent/20">
                   {sending || uploading ? <Square size={18} /> : <Send size={18} />}
                 </Button>
               </div>
@@ -1426,10 +1474,15 @@ export default function ChatPage() {
             <div className="flex items-center justify-between mt-1.5 px-1">
               <span className="text-[10px] text-text-muted flex items-center gap-2">
                 <span><Keyboard size={10} className="inline" /> Enter to send</span>
-                <span>Shift + Enter for newline</span>
-                <span className="text-accent/70">/ commands · @ mentions</span>
+                <span className="hidden sm:inline">Shift + Enter for newline</span>
+                <span className="hidden md:inline text-accent/70">/ commands Â· @ mentions</span>
+                {selectedModel && (
+                  <span className="hidden lg:inline text-text-secondary truncate max-w-[220px]">
+                    â†’ {activeModel?.role ? `${activeModel.role}: ` : ''}{selectedModel}
+                  </span>
+                )}
               </span>
-              <span className={`text-[10px] font-mono ${tokenEstimate > MAX_TOKENS ? 'text-danger' : 'text-text-muted'}`}>
+              <span className={`text-[10px] font-mono shrink-0 ${tokenEstimate > MAX_TOKENS ? 'text-danger' : 'text-text-muted'}`}>
                 {tokenEstimate} / {MAX_TOKENS} tokens
               </span>
             </div>
@@ -1437,107 +1490,31 @@ export default function ChatPage() {
         </div>
       </div>
 
-      <div className="w-72 border-l border-border bg-bg-secondary/40 p-4 hidden xl:flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between mb-3 px-0.5">
-          <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">{t('chat.conversations')}</h3>
-          <div className="flex gap-1">
-            <button
-              onClick={exportConversation}
-              className="p-1.5 rounded-lg text-text-secondary hover:text-accent hover:bg-accent/10 transition-all"
-              title="Export current conversation"
-            >
-              <Download size={15} />
-            </button>
-            <button
-              onClick={createNewChat}
-              className="p-1.5 rounded-lg text-text-secondary hover:text-accent hover:bg-accent/10 transition-all"
-              title={t('chat.newChat')}
-            >
-              <Plus size={16} />
-            </button>
-            {conversations.length > 0 && (
-              <button
-                onClick={clearAllConversations}
-                className="p-1.5 rounded-lg text-text-secondary hover:text-danger hover:bg-danger/10 transition-all"
-                title={t('chat.clearAll')}
-              >
-                <Trash2 size={14} />
-              </button>
-            )}
-          </div>
-        </div>
-        <ConversationsPanel
-          conversations={conversations}
-          convId={convId}
-          selectedWorkspace={selectedWorkspace}
-          onSelect={(id) => { loadHistory(id); setDrawerOpen(false); }}
-          onDelete={deleteConversation}
-          onExport={(title, msgs) => setExportTarget({ title, messages: msgs, convId: undefined })}
-        />
-      </div>
+      <ChatSidebar
+        conversations={conversations}
+        convId={convId}
+        selectedWorkspace={selectedWorkspace}
+        pendingAction={pendingAction}
+        onSelect={loadHistory}
+        onDelete={deleteConversation}
+        onExport={exportConversation}
+        onNewChat={createNewChat}
+        onClearAll={clearAllConversations}
+      />
 
-      {drawerOpen && (
-        <div className="fixed inset-0 z-40 xl:hidden">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setDrawerOpen(false)} />
-          <div
-            className="absolute inset-y-0 right-0 w-[85%] max-w-sm bg-bg-secondary border-l border-border shadow-2xl animate-slide-in-right flex flex-col"
-            onTouchStart={(e) => { touchStartX.current = e.touches[0].clientX; }}
-            onTouchEnd={(e) => {
-              if (touchStartX.current !== null) {
-                const dx = e.changedTouches[0].clientX - touchStartX.current;
-                if (dx < -60) setDrawerOpen(false);
-              }
-              touchStartX.current = null;
-            }}
-          >
-            <div className="flex items-center justify-between p-4 border-b border-border">
-              <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">{t('chat.conversations')}</h3>
-              <div className="flex gap-1">
-                <button
-                  onClick={exportConversation}
-                  className="p-1.5 rounded-lg text-text-secondary hover:text-accent hover:bg-accent/10 transition-all"
-                  title="Export current conversation"
-                >
-                  <Download size={15} />
-                </button>
-                <button
-                  onClick={createNewChat}
-                  className="p-1.5 rounded-lg text-text-secondary hover:text-accent hover:bg-accent/10 transition-all"
-                  title={t('chat.newChat')}
-                >
-                  <Plus size={16} />
-                </button>
-                {conversations.length > 0 && (
-                  <button
-                    onClick={clearAllConversations}
-                    className="p-1.5 rounded-lg text-text-secondary hover:text-danger hover:bg-danger/10 transition-all"
-                    title={t('chat.clearAll')}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                )}
-                <button
-                  onClick={() => setDrawerOpen(false)}
-                  className="p-1.5 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-tertiary transition-all"
-                  aria-label="Close history"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 h-[calc(100dvh-3.5rem)]">
-              <ConversationsPanel
-                conversations={conversations}
-                convId={convId}
-                selectedWorkspace={selectedWorkspace}
-                onSelect={(id) => { loadHistory(id); setDrawerOpen(false); }}
-                onDelete={deleteConversation}
-                onExport={(title, msgs) => { setExportTarget({ title, messages: msgs, convId: undefined }); setDrawerOpen(false); }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      <MobileDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        conversations={conversations}
+        convId={convId}
+        selectedWorkspace={selectedWorkspace}
+        pendingAction={pendingAction}
+        onSelect={loadHistory}
+        onDelete={deleteConversation}
+        onExport={exportConversation}
+        onNewChat={createNewChat}
+        onClearAll={clearAllConversations}
+      />
 
       {previewImage && (
         <ImagePreviewModal url={previewImage.url} name={previewImage.name} onClose={() => setPreviewImage(null)} />
@@ -1555,3 +1532,4 @@ export default function ChatPage() {
     </div>
   );
 }
+

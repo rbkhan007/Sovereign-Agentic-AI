@@ -292,16 +292,23 @@ def press(keys: str, interval: float = 0.05) -> str:
     if not parts:
         raise ValueError("No keys given")
     vks = []
+    unicode_parts = []
     for part in parts:
         low = part.lower()
         if low in _VK_MAP:
             vks.append(_VK_MAP[low])
-        elif len(part) == 1:
-            vks.append(_VK_MAP.get(low) or ord(part.upper()))
+        elif len(part) == 1 and part.isprintable():
+            # Printable punctuation (e.g. '!', '@', '+') has no reliable VK
+            # code via ord(); use the Unicode path instead so the correct
+            # character reaches the focused window.
+            unicode_parts.append(part)
         else:
             raise ValueError(f"Unknown key: {part}")
     for vk in vks:
         _send_input([_key_input(vk)])
+        time.sleep(interval)
+    for ch in unicode_parts:
+        _send_input([_key_input(0, unicode_char=ch), _key_input(0, keyup=True, unicode_char=ch)])
         time.sleep(interval)
     for vk in reversed(vks):
         _send_input([_key_input(vk, keyup=True)])

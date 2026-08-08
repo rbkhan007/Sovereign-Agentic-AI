@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useState } from 'react';
 import Card from '@/components/ui/Card';
@@ -24,7 +24,7 @@ function CollapsibleSection({ title, icon, children, defaultOpen = false }: { ti
 
 function CodeBlock({ children }: { children: string }) {
   return (
-    <pre className="bg-bg-primary/80 border border-border rounded-lg p-3 text-xs font-mono overflow-x-auto text-text-primary mt-2 mb-2">
+    <pre className="bg-bg-primary/80 border border-border rounded-xl p-3 text-xs font-mono overflow-x-auto text-text-primary mt-2 mb-2">
       <code>{children}</code>
     </pre>
   );
@@ -202,7 +202,7 @@ python run.py`}</CodeBlock>
 
 # Method 2: Manual setup in pgAdmin 4
 # 1. Open pgAdmin 4
-# 2. Right-click "Servers" → Register → Server
+# 2. Right-click "Servers" â†’ Register â†’ Server
 # 3. General tab:
 #    - Name: Agentic LLM (rhasan_indie_agentic_llm)
 #    - Group: Agentic LLM
@@ -280,3 +280,4 @@ GET /v1/metrics     # Request counts, latency, tokens/sec`}</CodeBlock>
     </div>
   );
 }
+

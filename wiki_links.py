@@ -13,7 +13,7 @@ _WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _INLINE_CODE_RE = re.compile(r"`[^`]+`")
 _FENCED_CODE_RE = re.compile(r"```[\s\S]*?```", re.MULTILINE)
-_TAG_RE = re.compile(r"(?<![a-zA-Z0-9:/\-_=.])#([A-Za-z0-9_\-/]+)", re.MULTILINE)
+_TAG_RE = re.compile(r"(?<![a-zA-Z0-9#:/\-_=.])#([A-Za-z0-9_\-/]+)", re.MULTILINE)
 
 
 class KnowledgeGraph:

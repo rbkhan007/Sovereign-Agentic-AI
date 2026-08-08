@@ -1,13 +1,14 @@
-'use client';
+﻿'use client';
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { MessageSquare, Database, Cpu, Wrench, Shield, Settings, HelpCircle, Sun, Moon, ChevronLeft, ChevronRight, Wifi, WifiOff, X, Menu, Bot, LayoutDashboard, type LucideIcon } from 'lucide-react';
+import { MessageSquare, Database, Cpu, Wrench, Shield, Settings, HelpCircle, Sun, Moon, ChevronLeft, ChevronRight, Wifi, WifiOff, X, Menu, Bot, LayoutDashboard, LogIn, LogOut, type LucideIcon } from 'lucide-react';
 import { PulseLineIcon, GraphWebIcon, WorkspacePaneIcon, TerminalCodeIcon } from '@/components/icons';
 import { useTheme } from '@/components/ThemeProvider';
 import { useSidebar } from '@/components/SidebarProvider';
 import { fetchJSON, toArray } from '@/lib/api';
+import { useAuth } from '@/components/auth/AuthProvider';
 
 type NavItem = { href: string; label: string; icon: LucideIcon | ((p: { size?: number; className?: string }) => React.ReactNode) };
 type AgentItem = { name: string; role?: string };
@@ -61,6 +62,7 @@ export default function Sidebar() {
   });
   const [online, setOnline] = useState<boolean | null>(null);
   const [agents, setAgents] = useState<AgentItem[]>([]);
+  const { isAuthenticated, logout } = useAuth();
 
   useEffect(() => {
     try { localStorage.setItem('sidebar_collapsed', String(collapsed)); } catch { /* ignore */ }
@@ -106,7 +108,7 @@ export default function Sidebar() {
               </span>
               <div className="min-w-0">
                 <h1 className="text-sm font-bold tracking-tight gradient-text truncate">Sovereign AI</h1>
-                <p className="text-[10px] text-text-muted truncate">Agentic · Local · Private</p>
+                <p className="text-[10px] text-text-muted truncate">Agentic Â· Local Â· Private</p>
               </div>
             </>
           ) : (
@@ -133,7 +135,7 @@ export default function Sidebar() {
                     key={item.href}
                     href={item.href}
                     onClick={() => setMobileOpen(false)}
-                    className={`relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                    className={`relative flex items-center gap-3 sidebar-navigation-item px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${
                       isActive
                         ? 'text-accent bg-accent-soft border border-accent/20'
                         : 'text-text-secondary hover:text-text-primary hover:bg-bg-tertiary border border-transparent'
@@ -166,7 +168,7 @@ export default function Sidebar() {
                     key={agent.name}
                     href={`/chat?agent=${encodeURIComponent(agent.name)}`}
                     onClick={() => setMobileOpen(false)}
-                    className={`relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                    className={`relative flex items-center gap-3 sidebar-navigation-item px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${
                       isActive
                         ? 'text-accent bg-accent-soft border border-accent/20'
                         : 'text-text-secondary hover:text-text-primary hover:bg-bg-tertiary border border-transparent'
@@ -200,7 +202,7 @@ export default function Sidebar() {
               key={item.href}
               href={item.href}
               onClick={() => setMobileOpen(false)}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+              className={`flex items-center gap-3 sidebar-navigation-item px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${
                 isActive ? 'text-accent bg-accent-soft border border-accent/20' : 'text-text-secondary hover:text-text-primary hover:bg-bg-tertiary border border-transparent'
               }`}
               title={collapsed ? item.label : undefined}
@@ -212,12 +214,31 @@ export default function Sidebar() {
         })}
         <button
           onClick={toggle}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 text-text-secondary hover:text-text-primary hover:bg-bg-tertiary"
+          className="w-full flex items-center gap-3 sidebar-navigation-item px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 text-text-secondary hover:text-text-primary hover:bg-bg-tertiary"
           title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
         >
           {theme === 'dark' ? <Sun size={18} className="shrink-0" /> : <Moon size={18} className="shrink-0" />}
           {!collapsed && <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>}
         </button>
+        {isAuthenticated ? (
+          <button
+            onClick={() => { logout(); }}
+            className="w-full flex items-center gap-3 sidebar-navigation-item px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 text-danger hover:text-danger hover:bg-danger/10"
+            title="Disconnect and logout"
+          >
+            <LogOut size={18} className="shrink-0" />
+            {!collapsed && <span>Logout</span>}
+          </button>
+        ) : (
+          <Link
+            href="/login"
+            onClick={() => setMobileOpen(false)}
+            className="w-full flex items-center gap-3 sidebar-navigation-item px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 text-accent hover:text-accent hover:bg-accent/10"
+          >
+            <LogIn size={18} className="shrink-0" />
+            {!collapsed && <span>Login</span>}
+          </Link>
+        )}
         <div className="flex items-center gap-2.5 text-xs text-text-muted px-3 pt-1">
           {online === true ? <Wifi size={14} className="text-success shrink-0" /> : <WifiOff size={14} className="text-danger shrink-0" />}
           {!collapsed && <span className="truncate">{online === true ? 'Backend connected' : online === false ? 'Backend offline' : 'Checking...'}</span>}
@@ -235,7 +256,7 @@ export default function Sidebar() {
       {!mobileOpen && (
         <button
           onClick={() => setMobileOpen(true)}
-          className="lg:hidden fixed top-3 left-3 z-30 p-2 rounded-lg bg-bg-secondary/80 backdrop-blur border border-border text-text-primary hover:text-text-accent transition-colors"
+          className="lg:hidden fixed top-3 left-3 z-30 p-2 rounded-xl bg-bg-secondary/80 backdrop-blur border border-border text-text-primary hover:text-text-accent transition-colors"
           aria-label="Open menu"
         >
           <Menu size={20} />
@@ -264,7 +285,7 @@ export default function Sidebar() {
             </div>
             <button
               onClick={() => setMobileOpen(false)}
-              className="absolute top-4 right-4 p-2 rounded-lg bg-bg-secondary border border-border text-text-primary"
+              className="absolute top-4 right-4 p-2 rounded-xl bg-bg-secondary border border-border text-text-primary"
               aria-label="Close menu"
             >
               <X size={20} />

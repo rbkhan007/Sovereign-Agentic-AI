@@ -163,8 +163,13 @@ export default function Dashboard() {
           </Button>
         )}
         <QuickAction href="/chat" label={t('dashboard.startChatting')} />
-        <QuickAction href="/workspace" label={t('dashboard.workspace')} variant="secondary" />
-        <QuickAction href="/database" label={t('dashboard.database')} variant="secondary" />
+        <QuickAction href="/workspace" label="Workspace" variant="secondary" />
+        <QuickAction href="/terminal" label="Terminal" variant="secondary" />
+        <QuickAction href="/models" label="Models" variant="secondary" />
+        <QuickAction href="/tools" label="Tools" variant="secondary" />
+        <QuickAction href="/graph" label="Knowledge Graph" variant="secondary" />
+        <QuickAction href="/admin" label="Admin" variant="secondary" />
+        <QuickAction href="/settings" label="Settings" variant="secondary" />
       </PageHeader>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 stagger">

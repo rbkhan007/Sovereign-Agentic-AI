@@ -33,6 +33,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       root.classList.add('dark');
       root.classList.remove('light');
     }
+    root.setAttribute('data-theme', theme);
     localStorage.setItem('theme', theme);
   }, [theme]);
 

@@ -14,6 +14,7 @@ so newly added entries automatically appear as MCP tools.
 import json
 import os
 import re
+import tempfile
 import threading
 from typing import Dict, List, Optional
 
@@ -41,6 +42,22 @@ def _slug(name: str) -> str:
 def _safe_filename(name: str) -> str:
     return _slug(name) + ".json"
 
+
+def _check_filename_collision(key: str, registry: Dict[str, dict], kind: str):
+    """Reject a name whose safe filename would overwrite a different entry.
+
+    Slugs collide when distinct keys normalize to the same filename (e.g. 'my
+    agent' vs 'my-agent'). Silently persisting would let the second write
+    clobber the first's JSON file, so that agent/skill would vanish on reload.
+    """
+    mine = _safe_filename(key)
+    for other in registry:
+        if other != key and _safe_filename(other) == mine:
+            raise ValueError(
+                f"{kind} name '{key}' collides with '{other}' on disk "
+                f"(both write {mine}); pick a different name"
+            )
+
 AGENTS: Dict[str, dict] = {
     "general": {
         "name": "general",
@@ -53,124 +70,12 @@ AGENTS: Dict[str, dict] = {
         ),
         "keywords": ["general", "assistant", "help"],
     },
-    "coder": {
-        "name": "coder",
-        "role": "Coding Agent",
-        "description": "Expert software engineer: clean, idiomatic, working, runnable code.",
-        "system_prompt": (
-            "You are an expert software engineering assistant that writes clean, "
-            "correct, idiomatic and runnable code. Follow these rules strictly:\n"
-            "1. When asked to write or modify a file, output the COMPLETE file "
-            "content inside a single fenced code block, prefixed with the language "
-            "(```python, ```tsx, etc.) so it can be copied straight into the "
-            "Agentic Terminal editor and run.\n"
-            "2. Prefer small, single-responsibility functions with clear names. "
-            "Add only the imports that are actually used.\n"
-            "3. Never invent APIs, libraries or functions that do not exist. If a "
-            "dependency is required, state the exact install command.\n"
-            "4. Make the code executable end-to-end: include a __main__ guard or a "
-            "minimal runnable entry point when it makes sense.\n"
-            "5. Explain trade-offs in 1-2 short sentences. If the task is genuinely "
-            "ambiguous, ask exactly one clarifying question before writing code.\n"
-            "6. When fixing a bug, show the corrected snippet and one line on why "
-            "the previous version failed."
-        ),
-        "keywords": ["code", "function", "bug", "debug", "script", "python", "refactor", "runnable", "editor"],
-    },
-    "architect": {
-        "name": "architect",
-        "role": "Software Architect",
-        "description": "Scaffolds files, modules and runnable project structure for the Agentic Terminal.",
-        "system_prompt": (
-            "You are a software architect that plans and scaffolds code for the "
-            "Agentic Terminal IDE. When given a goal you: (a) list the files needed "
-            "with a one-line purpose each, (b) write each file's full content in its "
-            "own fenced code block labelled with the relative path via a path comment "
-            "(# file: path/to/file.py), and (c) give the exact run/build command. "
-            "Prefer simple, dependency-light, runnable solutions. Keep each file "
-            "focused and complete so it can be saved and executed directly."
-        ),
-        "keywords": ["scaffold", "project", "structure", "architecture", "files", "module", "build", "setup"],
-    },
-    "debugger": {
-        "name": "debugger",
-        "role": "Debugging Agent",
-        "description": "Finds root causes, explains errors, suggests fixes.",
-        "system_prompt": (
-            "You are a meticulous debugging assistant. First restate the "
-            "problem in one line, then list likely root causes from most to "
-            "least probable, then propose the most likely fix with a code "
-            "example. If more information is needed, list exactly what to "
-            "gather. Be concrete and avoid generic advice."
-        ),
-        "keywords": ["bug", "error", "exception", "traceback", "crash", "fix", "debug"],
-    },
-    "writer": {
-        "name": "writer",
-        "role": "Writing Agent",
-        "description": "Engaging writer for essays, stories, emails, marketing.",
-        "system_prompt": (
-            "You are a skilled writer. Match the requested tone and length. "
-            "Write vivid, well-structured prose with a clear beginning, middle "
-            "and end. Prefer concrete details over abstractions. Never pad."
-        ),
-        "keywords": ["essay", "email", "story", "letter", "article", "poem", "write"],
-    },
-    "translator": {
-        "name": "translator",
-        "role": "Translation Agent",
-        "description": "Accurate translator that preserves tone and meaning.",
-        "system_prompt": (
-            "You are a professional translator. Translate faithfully, preserving "
-            "meaning, tone and formatting. For idioms, choose the natural "
-            "equivalent rather than a literal rendering. Return only the "
-            "translated text unless asked to explain choices."
-        ),
-        "keywords": [
-            "translate", "translation", "in french", "in spanish",
-            "in german", "in english",
-        ],
-    },
-    "summarizer": {
-        "name": "summarizer",
-        "role": "Summarizer Agent",
-        "description": "Condenses long text into key points.",
-        "system_prompt": (
-            "You are a summarization specialist. Produce a concise summary that "
-            "captures the essential points, then, if useful, a short bulleted "
-            "list of key takeaways. Preserve any numbers, names and dates "
-            "exactly. Do not add information that is not in the source."
-        ),
-        "keywords": ["summarize", "summary", "tl;dr", "condense", "key points"],
-    },
-    "researcher": {
-        "name": "researcher",
-        "role": "Research Agent",
-        "description": "Structured analysis with evidence and trade-offs.",
-        "system_prompt": (
-            "You are a careful research assistant. Structure answers with "
-            "sections and cite specific evidence when reasoning. Distinguish "
-            "what is known, what is uncertain, and what would require more "
-            "information. End with a short recommendation or next steps."
-        ),
-        "keywords": ["research", "compare", "analysis", "explain", "why", "what is"],
-    },
-    "teacher": {
-        "name": "teacher",
-        "role": "Teaching Agent",
-        "description": "Explains concepts simply, step by step.",
-        "system_prompt": (
-            "You are a patient teacher. Explain step by step, starting from the "
-            "simplest idea. Use analogies and short examples. Check for "
-            "understanding and offer to go deeper on any part."
-        ),
-        "keywords": ["explain", "teach", "learn", "concept", "how does", "tutorial"],
-    },
     "agent_x": {
         "name": "agent_x",
         "role": "Agent X (All-in-One)",
         "description": "Universal autonomous problem-solver: delivers complete, production-ready, any-to-any results.",
         "model": "mythos-nano",
+        "workflow": "auto_approved",
         "system_prompt": (
             "You are Agent X, a universal autonomous engineer and problem solver. "
             "You produce COMPLETE, PRODUCTION-READY, ACCURATE deliverables for "
@@ -213,33 +118,9 @@ AGENTS: Dict[str, dict] = {
             "production", "autonomous", "build project",
         ],
     },
-    "data_scientist": {
-        "name": "data_scientist",
-        "role": "Data Scientist",
-        "description": "Automated ML specialist. Trains an Auto-Sklearn model on your CSV data.",
-        "system_prompt": (
-            "You are an automated data science assistant. Help users prepare CSV data, "
-            "identify target columns, and run AutoML to find the best model. After training, "
-            "summarize the accuracy score and the saved model file path."
-        ),
-        "keywords": ["csv", "data", "predict", "model", "automl", "analyze", "train"],
-    },
-    "healer": {
-        "name": "healer",
-        "role": "Self-Healing Agent",
-        "description": "Diagnoses and repairs broken Python snippets and data pipelines automatically.",
-        "system_prompt": (
-            "You are an autonomous self-healing agent. "
-            "When provided with a Python script that fails, you analyze the error, "
-            "diagnose the root cause, and attempt to apply a fix. "
-            "You can also fix CSV parsing issues by suggesting new parameters. "
-            "Always explain your reasoning before applying a fix."
-        ),
-        "keywords": ["debug", "fix", "repair", "error", "csv", "pandas"],
-    },
 }
 
-DEFAULT_AGENT = "general"
+DEFAULT_AGENT = "agent_x"
 
 # Skills: name -> {description, template, params}
 # The template is filled with the user's input text (and optional params),
@@ -330,8 +211,10 @@ def list_agents() -> List[str]:
 
 def get_agent(name: str) -> Optional[dict]:
     if not name:
-        return dict(AGENTS.get(DEFAULT_AGENT, {}))
-    return AGENTS.get(name.strip().lower())
+        agent = AGENTS.get(DEFAULT_AGENT)
+        return dict(agent) if agent else None
+    agent = AGENTS.get(name.strip().lower())
+    return dict(agent) if agent else None
 
 
 def agent_system_prompt(name: str) -> str:
@@ -344,7 +227,8 @@ def list_skills() -> List[str]:
 
 
 def get_skill(name: str) -> Optional[dict]:
-    return SKILLS.get(name.strip().lower())
+    skill = SKILLS.get(name.strip().lower())
+    return dict(skill) if skill else None
 
 
 def render_skill(name: str, input_text: str, params: Optional[dict] = None) -> Optional[dict]:
@@ -358,10 +242,12 @@ def render_skill(name: str, input_text: str, params: Optional[dict] = None) -> O
         return None
     fill = {}
     for p in skill.get("params", []):
+        if p["name"] == "input":
+            continue
         fill[p["name"]] = (params or {}).get(p["name"], p.get("default", ""))
     try:
         prompt = skill["template"].format(input=input_text, **fill)
-    except (KeyError, ValueError, IndexError):
+    except (KeyError, ValueError, IndexError, TypeError):
         prompt = skill["template"].replace("{input}", input_text)
     return {
         "name": skill["name"],
@@ -398,8 +284,19 @@ def _load_custom(dirname: str, registry: Dict[str, dict], builtin: Optional[set]
 def _persist(dirname: str, name: str, data: dict) -> str:
     os.makedirs(dirname, exist_ok=True)
     path = os.path.join(dirname, _safe_filename(name))
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    fd, tmp = tempfile.mkstemp(dir=dirname, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
     return path
 
 
@@ -446,14 +343,15 @@ def add_agent(name: str, system_prompt: str, role: str = "",
         raise ValueError(f"'{name}' is a built-in agent and cannot be overridden")
     if not system_prompt or not system_prompt.strip():
         raise ValueError("system_prompt is required")
-    agent = {
-        "name": key,
-        "role": role or "Custom Agent",
-        "description": description or f"User-defined agent: {name}",
-        "system_prompt": system_prompt,
-        "keywords": list(keywords or [key]),
-    }
     with _LOCK:
+        _check_filename_collision(key, AGENTS, "Agent")
+        agent = {
+            "name": key,
+            "role": role or "Custom Agent",
+            "description": description or f"User-defined agent: {name}",
+            "system_prompt": system_prompt,
+            "keywords": list(keywords or [key]),
+        }
         AGENTS[key] = agent
         _persist(_AGENTS_DIR, key, agent)
         db = _db()
@@ -474,10 +372,13 @@ def delete_agent(name: str) -> bool:
     if key in _BUILTIN_AGENTS:
         return False
     with _LOCK:
-        if AGENTS.pop(key, None) is None:
+        agent = AGENTS.pop(key, None)
+        if agent is None:
             return False
+        removed = False
         try:
             os.remove(os.path.join(_AGENTS_DIR, _safe_filename(key)))
+            removed = True
         except OSError:
             pass
         db = _db()
@@ -485,7 +386,15 @@ def delete_agent(name: str) -> bool:
             try:
                 db.delete_agent(key)
             except Exception:
-                pass
+                # DB delete failed: restore state so the row doesn't re-hydrate
+                # on restart and resurrect a "deleted" agent.
+                AGENTS[key] = agent
+                if removed:
+                    try:
+                        _persist(_AGENTS_DIR, key, agent)
+                    except Exception:
+                        pass
+                return False
     return True
 
 
@@ -499,18 +408,19 @@ def add_skill(name: str, template: str, system_prompt: str = "",
         raise ValueError(f"'{name}' is a built-in skill and cannot be overridden")
     if not template or "{input}" not in template:
         raise ValueError("template is required and must contain {input}")
-    skill = {
-        "name": key,
-        "description": description or f"User-defined skill: {name}",
-        "system_prompt": system_prompt or "You are a helpful assistant specialized in this task.",
-        "template": template,
-        "params": [
-            {"name": str(p.get("name")), "default": p.get("default", "")}
-            for p in (params or [])
-            if isinstance(p, dict) and str(p.get("name", "")).strip()
-        ],
-    }
     with _LOCK:
+        _check_filename_collision(key, SKILLS, "Skill")
+        skill = {
+            "name": key,
+            "description": description or f"User-defined skill: {name}",
+            "system_prompt": system_prompt or "You are a helpful assistant specialized in this task.",
+            "template": template,
+            "params": [
+                {"name": str(p.get("name")), "default": p.get("default", "")}
+                for p in (params or [])
+                if isinstance(p, dict) and str(p.get("name", "")).strip()
+            ],
+        }
         SKILLS[key] = skill
         _persist(_SKILLS_DIR, key, skill)
         db = _db()
@@ -531,10 +441,13 @@ def delete_skill(name: str) -> bool:
     if key in _BUILTIN_SKILLS:
         return False
     with _LOCK:
-        if SKILLS.pop(key, None) is None:
+        skill = SKILLS.pop(key, None)
+        if skill is None:
             return False
+        removed = False
         try:
             os.remove(os.path.join(_SKILLS_DIR, _safe_filename(key)))
+            removed = True
         except OSError:
             pass
         db = _db()
@@ -542,5 +455,13 @@ def delete_skill(name: str) -> bool:
             try:
                 db.delete_skill(key)
             except Exception:
-                pass
+                # DB delete failed: restore state so the row doesn't re-hydrate
+                # on restart and resurrect a "deleted" skill.
+                SKILLS[key] = skill
+                if removed:
+                    try:
+                        _persist(_SKILLS_DIR, key, skill)
+                    except Exception:
+                        pass
+                return False
     return True

@@ -38,8 +38,10 @@ export default function AdminPage() {
         fetchJSON('/v1/admin/threads'),
       ]);
       setMetrics(m as Metrics);
-      setLogs(Array.isArray(l) ? l : []);
-      setThreads(threadsData as Record<string, unknown>);
+      setLogs(Array.isArray(l) ? l : ((l as { lines?: unknown[] } | null)?.lines as string[]) ?? []);
+      setThreads((threadsData && typeof threadsData === 'object' && 'threads' in threadsData)
+        ? (threadsData as { threads: unknown }).threads as Record<string, unknown>
+        : threadsData as Record<string, unknown>);
     } catch {
       addToast('Failed to load admin data', 'error');
     } finally {
@@ -174,7 +176,18 @@ export default function AdminPage() {
               <Card>
                 <h3 className="font-semibold mb-4">{t('admin.threads')}</h3>
                 <div className="bg-bg-primary/50 p-4 rounded-xl overflow-x-auto border border-border">
-                  {threads && typeof threads === 'object' ? (
+                  {Array.isArray(threads) ? (
+                    <div className="space-y-2">
+                      {threads.map((th, i) => (
+                        <div key={i} className="flex items-center justify-between py-1.5 border-b border-border/50 last:border-0">
+                          <span className="text-sm font-medium">{String((th as { name?: unknown })?.name ?? `thread-${i}`)}</span>
+                          <span className="text-xs text-text-secondary font-mono">
+                            {typeof th === 'object' ? JSON.stringify(th) : String(th)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : threads && typeof threads === 'object' ? (
                     <div className="space-y-2">
                       {Object.entries(threads).map(([key, val]) => (
                         <div key={key} className="flex items-center justify-between py-1.5 border-b border-border/50 last:border-0">
@@ -337,6 +350,7 @@ function SkillsAdminTab() {
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newTemplate, setNewTemplate] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const { addToast } = useToast();
 
   useEffect(() => {
@@ -355,7 +369,11 @@ function SkillsAdminTab() {
   }
 
   async function deleteSkill(name: string) {
-    if (!window.confirm(`Delete skill "${name}"?`)) return;
+    if (pendingDelete !== name) {
+      setPendingDelete(name);
+      return;
+    }
+    setPendingDelete(null);
     try {
       await fetchJSON(`/v1/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
       addToast(t('admin.skillDeleted'), 'success');
@@ -382,7 +400,15 @@ function SkillsAdminTab() {
                 <p className="text-sm font-medium">{s.name}</p>
                 {s.description && <p className="text-xs text-text-secondary truncate">{s.description}</p>}
               </div>
-              <Button variant="danger" size="sm" onClick={() => deleteSkill(s.name)} className="!py-1 !px-2 text-xs shrink-0">{t('admin.delete')}</Button>
+              {pendingDelete === s.name ? (
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-text-secondary">Confirm?</span>
+                  <Button variant="danger" size="sm" onClick={() => deleteSkill(s.name)} className="!py-1 !px-2 text-xs">Yes</Button>
+                  <Button variant="secondary" size="sm" onClick={() => setPendingDelete(null)} className="!py-1 !px-2 text-xs">No</Button>
+                </div>
+              ) : (
+                <Button variant="danger" size="sm" onClick={() => deleteSkill(s.name)} className="!py-1 !px-2 text-xs shrink-0">{t('admin.delete')}</Button>
+              )}
             </div>
           ))
         )}
@@ -397,6 +423,7 @@ function AgentsAdminTab() {
   const [newName, setNewName] = useState('');
   const [newRole, setNewRole] = useState('');
   const [newDesc, setNewDesc] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const { addToast } = useToast();
 
   useEffect(() => {
@@ -415,7 +442,11 @@ function AgentsAdminTab() {
   }
 
   async function deleteAgent(name: string) {
-    if (!window.confirm(`Delete agent "${name}"?`)) return;
+    if (pendingDelete !== name) {
+      setPendingDelete(name);
+      return;
+    }
+    setPendingDelete(null);
     try {
       await fetchJSON(`/v1/agents/${encodeURIComponent(name)}`, { method: 'DELETE' });
       addToast(t('admin.agentDeleted'), 'success');
@@ -445,7 +476,15 @@ function AgentsAdminTab() {
                 </div>
                 {a.description && <p className="text-xs text-text-secondary truncate">{a.description}</p>}
               </div>
-              <Button variant="danger" size="sm" onClick={() => deleteAgent(a.name)} className="!py-1 !px-2 text-xs shrink-0">{t('admin.delete')}</Button>
+              {pendingDelete === a.name ? (
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-text-secondary">Confirm?</span>
+                  <Button variant="danger" size="sm" onClick={() => deleteAgent(a.name)} className="!py-1 !px-2 text-xs">Yes</Button>
+                  <Button variant="secondary" size="sm" onClick={() => setPendingDelete(null)} className="!py-1 !px-2 text-xs">No</Button>
+                </div>
+              ) : (
+                <Button variant="danger" size="sm" onClick={() => deleteAgent(a.name)} className="!py-1 !px-2 text-xs shrink-0">{t('admin.delete')}</Button>
+              )}
             </div>
           ))
         )}
@@ -555,6 +594,7 @@ function HarnessTab() {
   const [adjustTask, setAdjustTask] = useState('');
   const [adjustModel, setAdjustModel] = useState('');
   const [adjustScore, setAdjustScore] = useState('50');
+  const [confirmReset, setConfirmReset] = useState(false);
   const { addToast } = useToast();
 
   useEffect(() => {
@@ -565,7 +605,11 @@ function HarnessTab() {
   }, []);
 
   async function resetHarness() {
-    if (!window.confirm('Reset all harness scores?')) return;
+    if (!confirmReset) {
+      setConfirmReset(true);
+      return;
+    }
+    setConfirmReset(false);
     try {
       await fetchJSON('/v1/router/harness/reset', { method: 'POST' });
       addToast('Harness reset', 'success');
@@ -603,7 +647,15 @@ function HarnessTab() {
           <div className="flex items-center gap-3 text-sm text-text-secondary">
             <span>Generation: <span className="font-mono">{stats?.generation ?? 0}</span></span>
             <span>Epsilon: <span className="font-mono">{stats?.epsilon ?? 0}</span></span>
-            <Button variant="danger" size="sm" onClick={resetHarness} className="!py-1 !px-2 text-xs">Reset</Button>
+            {confirmReset ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-text-secondary">Confirm reset?</span>
+                <Button variant="danger" size="sm" onClick={resetHarness} className="!py-1 !px-2 text-xs">Yes</Button>
+                <Button variant="secondary" size="sm" onClick={() => setConfirmReset(false)} className="!py-1 !px-2 text-xs">No</Button>
+              </div>
+            ) : (
+              <Button variant="danger" size="sm" onClick={resetHarness} className="!py-1 !px-2 text-xs">Reset</Button>
+            )}
           </div>
         </div>
 

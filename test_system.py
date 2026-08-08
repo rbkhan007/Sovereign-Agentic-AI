@@ -101,7 +101,7 @@ check("agent detail", bool(a1.get("system_prompt")))
 s1 = get("/v1/skills/summarize").json()
 check("skill detail", bool(s1.get("template")))
 
-ra = post("/v1/agents/coder/run", {
+ra = post("/v1/agents/agent_x/run", {
     "message": "Write a python function that returns 42. Short.",
     "use_planning": False,
 }, timeout=HEAVY_TIMEOUT).json()
@@ -116,7 +116,7 @@ check("skill run reply", bool(rs.get("response")) and "Error" not in rs.get("res
 m = post("/mcp", {"jsonrpc": "2.0", "method": "tools/list", "id": 1}).json()
 tools = m.get("result", [])
 names = [t.get("name") for t in tools]
-check("mcp tools list", "chat" in names and "coder" in names and "summarize" in names, f"({len(tools)} tools)")
+check("mcp tools list", "chat" in names and "agent_x" in names and "summarize" in names, f"({len(tools)} tools)")
 
 m = post("/mcp", {"jsonrpc": "2.0", "method": "tools/call",
                   "params": {"name": "chat", "arguments": {"input": "Say hi in 2 words."}},

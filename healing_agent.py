@@ -117,7 +117,7 @@ DIAGNOSIS:
         """Run code in a temp file with timeout. Returns (rc, stdout, stderr)."""
         d = tempfile.mkdtemp(prefix="heal_src_")
         p = os.path.join(d, "snippet.py")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             f.write(textwrap.dedent(code))
         try:
             proc = subprocess.run([sys.executable, p],
@@ -152,8 +152,9 @@ DIAGNOSIS:
         if not _HEALING_LOCK.acquire(timeout=1):
             raise RuntimeError("A healing attempt is already running. Please wait.")
 
-        timeout = timeout_s or int(getattr(CONFIG, "gen_timeout_s", _DEFAULT_TIMEOUT))
-        max_r = max_retries if max_retries is not None else 2
+        timeout = timeout_s or int((getattr(CONFIG, "healing", {}) or {}).get("timeout_s", _DEFAULT_TIMEOUT))
+        cfg_retries = int((getattr(CONFIG, "healing", {}) or {}).get("max_retries", 2))
+        max_r = max_retries if max_retries is not None else cfg_retries
         attempts = []
         current = code
         err = ""

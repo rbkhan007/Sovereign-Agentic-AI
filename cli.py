@@ -28,6 +28,19 @@ _MAX_HISTORY = 200
 _USE_COLOR = None
 
 
+def _enable_utf8():
+    """Reconfigure stdout/stderr to UTF-8 so model Unicode never crashes the
+    Windows console (cp1252 'charmap' can't encode e.g. em-dashes/emoji).
+    errors='replace' keeps piping/redirects safe instead of raising."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            reconfigure = getattr(stream, "reconfigure", None)
+            if reconfigure is not None:
+                reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _init_color() -> bool:
     global _USE_COLOR
     if _USE_COLOR is not None:
@@ -108,70 +121,94 @@ WELCOME = _cyan("\n".join([
 ]))
 
 HELP_TEXT = f"""
-{_cyan('  COMMANDS')}
-  {_cyan('- system')}
-    /help                  show this help
-    /status                live status (HUD, VRAM, models, config)
-    /debug on|off          toggle debug logging
-    /new                   start a fresh conversation
-    /retry                 re-run your last prompt
-    /clear                 clear this conversation
-    /exit                  quit
-  {_cyan('- models')}
-    /model <name>          switch executor model
-    /models                list all models (local + cloud)
-    /preload <name>        load a model into VRAM now
-    /unload [name]         unload model(s) from VRAM
-    /vram                  VRAM usage per loaded model
-  {_cyan('- planning & reasoning')}
-    /plan on|off           toggle planning/reasoning (strategist)
-    /think on|off          toggle live reasoning output
-    /harness               show adaptive model-selection scores
-    /harness reset         clear all harness scores
-    /harness adjust <task> <model> <score>  manually set a score
-    /harness export|import persist/restore harness state
-    /arc [n]               run ARC reasoning eval (needs arc/training.json)
-  {_cyan('- agents & skills')}
-    /agent <name>          switch agent persona (see /agents)
-    /agents                list agent personas (coder, debugger, writer, translator, ...)
-    /skills                list skills (summarize, translate, code-review, ...)
-    /skill <name> <text>   run a skill directly on text
-    /code on|off           coding-agent persona (alias for /agent coder)
-    /computer <goal>       full computer-use agent (shell, files, web, system)
-    /computer tools        list available computer agent tools
-    /computer sandbox on|off  toggle sandbox mode (read-only)
-    /lora <sub>            list|enable|disable|import|train|delete
-  {_cyan('- generation')}
-    /parallel on|off       ensemble mode: N models answer, a judge picks best
-    /context show|set|clear  inspect / set system prompt, show recent context
-    /temperature <0-2>     override sampling temperature
-    /max <tokens>          override max output tokens
-    /timeout <seconds>     change generation watchdog timeout
-    /tokens                token usage this session
-  {_cyan('- conversations')}
-    /save [name]           persist this conversation to disk
-    /load <name>           restore a saved conversation
-    /sessions              list saved conversations
-  {_cyan('- cloud & memory')}
-    /openai <key>          set OpenAI-compatible API key
-    /cloud <name>          cloud preset: {', '.join(CLOUD_PRESETS)} (key via /openai)
-    /db on|off|stats|clear|search|tables|index
-                         toggle PostgreSQL, show stats, clear, search, list tables/indexes
-    /prune                 delete memories older than {CONFIG.prune_max_age_days} days
-    /exec <cmd>            run a shell command   (or prefix with !)
-  {_cyan('- mcp tools')}
-    /mcp                   list all MCP tools (chat, agents, skills)
-    /mcp call <tool> <input>  call an MCP tool from the terminal
-    /mcp json              output tool list as JSON
+{_cyan('  QUICK START')}
+  Ask anything:       explain quantum computing
+  Use an agent:       /agent agent_x
+  Switch model:       /model qwen2.5-omni-3b
+  Run code:           /code on
+  Shell command:      !dir
+  Help:               /help
 
-  {_cyan('SHORTCUTS')}
-    !!                     re-run last prompt (same as /retry)
-    !<command>             run shell command
-    Enter to send, \\ at line end for multi-line, Ctrl+C to stop output
-    Ctrl+A select all   Ctrl+C copy (or cancel)   Ctrl+V paste   Ctrl+X cut
-    Ctrl+D del   Ctrl+W word-del   Ctrl+K del-to-end   Ctrl+U del-to-start
-    Mouse: click to position cursor, drag to select, double-click a word,
-           right-click to paste
+{_cyan('  SYSTEM')}
+  /help                show this help
+  /status              live status (HUD, VRAM, models, config)
+  /debug on|off        toggle debug logging
+  /new                 start a fresh conversation
+  /retry               re-run your last prompt
+  /clear               clear this conversation
+  /exit                quit
+
+{_cyan('  MODELS')}
+  /model <name>        switch executor model
+  /models              list all models (local + cloud)
+  /preload <name>      load a model into VRAM now
+  /unload [name]       unload model(s) from VRAM
+  /vram                VRAM usage per loaded model
+
+{_cyan('  PLANNING & REASONING')}
+  /plan on|off         toggle planning/reasoning (strategist)
+  /think on|off        toggle live reasoning output
+  /harness             show adaptive model-selection scores
+  /harness reset       clear all harness scores
+  /harness adjust <task> <model> <score>  manually set a score
+  /harness export|import persist/restore harness state
+  /arc [n]             run ARC reasoning eval (needs arc/training.json)
+
+{_cyan('  AGENTS & SKILLS')}
+  /agent <name>        switch agent persona (see /agents)
+  /agents              list agent personas (agent_x, general, custom...)
+  /skills              list skills (summarize, translate, code-review, ...)
+  /skill <name> <text> run a skill directly on text
+  /code on|off         toggle coding mode (agent_x handles code)
+  /computer <goal>     full computer-use agent (shell, files, web, system)
+  /computer tools      list available computer agent tools
+  /computer sandbox on|off  toggle sandbox mode (read-only)
+  /lora <sub>          list|enable|disable|import|train|delete
+
+{_cyan('  GENERATION')}
+  /parallel on|off     ensemble mode: N models answer, a judge picks best
+  /context show|set|clear  inspect / set system prompt, show recent context
+  /temperature <0-2>   override sampling temperature
+  /max <tokens>        override max output tokens
+  /timeout <seconds>   change generation watchdog timeout
+  /tokens              token usage this session
+
+{_cyan('  CONVERSATIONS')}
+  /save [name]         persist this conversation to disk
+  /load <name>         restore a saved conversation
+  /sessions            list saved conversations
+
+{_cyan('  CLOUD & MEMORY')}
+  /openai <key>        set OpenAI-compatible API key
+  /cloud <name>        cloud preset: {', '.join(CLOUD_PRESETS)} (key via /openai)
+  /db on|off|stats|clear|search|tables|index
+                       toggle PostgreSQL, show stats, clear, search, list tables/indexes
+  /prune               delete memories older than {CONFIG.prune_max_age_days} days
+  /exec <cmd>          run a shell command   (or prefix with !)
+
+{_cyan('  MCP TOOLS')}
+  /mcp                 list all MCP tools (chat, agents, skills)
+  /mcp call <tool> <input>  call an MCP tool from the terminal
+  /mcp json            output tool list as JSON
+
+{_cyan('  EXAMPLES')}
+  /agent agent_x
+  /model qwen2.5-omni-3b
+  /computer find all .py files and count lines
+  /code on
+  /skill summarize Paste a long text here
+  /mcp call chat What is machine learning?
+  /harness adjust code hy-mt2 85.0
+
+{_cyan('  SHORTCUTS')}
+  !!                   re-run last prompt (same as /retry)
+  !<command>           run shell command
+  Enter to send, \\ at line end for multi-line, Ctrl+C to stop output
+  Ctrl+A select all   Ctrl+C copy (or cancel)   Ctrl+V paste   Ctrl+X cut
+  Ctrl+D del   Ctrl+W word-del   Ctrl+K del-to-end   Ctrl+U del-to-start
+  Tab                  auto-complete commands
+  Mouse: click to position cursor, drag to select, double-click a word,
+         right-click to paste
 """
 
 _COMMANDS = [
@@ -194,21 +231,26 @@ def _command_allowed(cmd: str) -> bool:
     An empty whitelist (the default) allows every command. Control commands
     (/help, /?, /exit, /quit, /status) always remain available so the user can
     get help and escape even when a restrictive whitelist is active. Matching is
-    on the base command name, so a whitelisted "/lora" permits "/lora train".
+    on the base command name (leading slash ignored), so a whitelisted "lora"
+    or "/lora" permits "/lora train".
     """
     if not cmd.startswith("/"):
         return True
-    base = cmd.split(" ", 1)[0].lower()
+    base = cmd.split(" ", 1)[0].lower().lstrip("/")
     if not CONFIG.cli_command_whitelist:
         return True
-    return base in _ALWAYS_ALLOWED or base in CONFIG.cli_command_whitelist
+    allowed = {c.lower().lstrip("/") for c in CONFIG.cli_command_whitelist}
+    always = {c.lstrip("/") for c in _ALWAYS_ALLOWED if c != "/"}
+    return base in always or base in allowed
 
 
 def _visible_commands() -> list[str]:
     """Commands offered for tab-completion, honoring the whitelist."""
     if not CONFIG.cli_command_whitelist:
         return list(_COMMANDS)
-    return [c for c in _COMMANDS if c in _ALWAYS_ALLOWED or c in CONFIG.cli_command_whitelist]
+    allowed = {c.lower().lstrip("/") for c in CONFIG.cli_command_whitelist}
+    always = {c.lstrip("/") for c in _ALWAYS_ALLOWED if c != "/"}
+    return [c for c in _COMMANDS if c.lstrip("/") in always or c.lstrip("/") in allowed]
 
 
 def _prompt() -> str:
@@ -726,6 +768,9 @@ def _msvcrt_edit(prompt: str, tui: Optional[TUIRenderer] = None, row: Optional[i
     hidx = len(hist)
     kernel32 = ctypes.windll.kernel32
     edit_row = row
+    _tab_matches: list[str] = []
+    _tab_index = 0
+    _last_tab_prefix = ""
 
     stdin_handle = kernel32.GetStdHandle(wintypes.DWORD(-10))
     stdout_handle = kernel32.GetStdHandle(wintypes.DWORD(-11))
@@ -1011,10 +1056,21 @@ def _msvcrt_edit(prompt: str, tui: Optional[TUIRenderer] = None, row: Optional[i
                 if ch == "\t":
                     if buf and buf[0] == "/":
                         prefix = "".join(buf)
-                        matches = [c for c in _visible_commands() if c.startswith(prefix)]
-                        if matches:
-                            buf[:] = list(matches[0] + " ")
-                            pos = len(buf)
+                        if prefix != _last_tab_prefix:
+                            _tab_matches = [c for c in _visible_commands() if c.startswith(prefix)]
+                            _tab_index = 0
+                            _last_tab_prefix = prefix
+                        if _tab_matches:
+                            if len(_tab_matches) == 1:
+                                buf[:] = list(_tab_matches[0] + " ")
+                                pos = len(buf)
+                            else:
+                                match = _tab_matches[_tab_index % len(_tab_matches)]
+                                buf[:] = list(match + " ")
+                                pos = len(buf)
+                                _tab_index += 1
+                            if len(_tab_matches) > 1:
+                                print("\n  " + "  ".join(_tab_matches))
                     else:
                         buf.insert(pos, " ")
                         pos += 1
@@ -1086,10 +1142,33 @@ def _line_input(prompt: str = "", tui: Optional[TUIRenderer] = None, row: Option
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
     if isinstance(inp, types.BuiltinFunctionType) and interactive and os.name == "nt":
         return _msvcrt_edit(prompt, tui, row)
+    if interactive:
+        try:
+            import readline
+            readline.set_completer(_readline_completer)
+            readline.parse_and_bind("tab: complete")
+        except ImportError:
+            pass
     try:
         return inp(prompt)
     except (EOFError, KeyboardInterrupt):
         return None
+    finally:
+        try:
+            import readline
+            readline.set_completer(None)
+        except ImportError:
+            pass
+
+
+def _readline_completer(text: str, state: int) -> Optional[str]:
+    """Readline tab-completion callback for slash commands."""
+    if not text.startswith("/"):
+        return None
+    options = [c for c in _visible_commands() if c.startswith(text)]
+    if state < len(options):
+        return options[state]
+    return None
 
 
 def _read_prompt(prompt: str, tui: Optional[TUIRenderer] = None) -> Optional[str]:
@@ -1113,8 +1192,12 @@ def _read_prompt(prompt: str, tui: Optional[TUIRenderer] = None) -> Optional[str
 
 # ---------- generation ----------
 
-def _show_thinking(text: str, st: dict):
+def _show_thinking(text: str, st: dict, tui: Optional[TUIRenderer] = None):
     if not text:
+        return
+    if tui is not None:
+        tui.add("thinking", text[:600])
+        tui.render()
         return
     if st["show_thinking"]:
         border = _g("\u2500", "-")
@@ -1142,7 +1225,7 @@ def _ask_stream(orch: Orchestrator, st: dict, kwargs: dict, tui: Optional[TUIRen
                 else:
                     print(_cyan(f"  > {model}"))
             elif t == "thinking":
-                _show_thinking(evt.get("content") or "", st)
+                _show_thinking(evt.get("content") or "", st, tui)
             elif t == "response":
                 chunk = evt.get("content") or ""
                 if chunk:
@@ -1289,7 +1372,10 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
     if cmd == "/models":
         for name, mc in mm.configs.items():
             loaded = " [loaded]" if name in mm.instances else ""
-            print(f"  {name} ({mc.role}){loaded}")
+            caps = getattr(mc, "capabilities", [])
+            cap_str = f" [{', '.join(caps)}]" if caps else ""
+            print(f"  {name} ({mc.role}){loaded}{cap_str}")
+            print(f"    ctx={mc.n_ctx} temp={mc.temperature} max={mc.max_tokens}")
         if CONFIG.openai.enabled:
             print(f"  openai/{CONFIG.openai.chat_model} (cloud)")
         return
@@ -1454,7 +1540,7 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
             st["coding"] = parts[1].lower() == "on"
         else:
             st["coding"] = not st["coding"]
-        st["agent"] = "coder" if st["coding"] else "general"
+        st["agent"] = "agent_x" if st["coding"] else agents.DEFAULT_AGENT
         print(f"Coding agent: {'ON' if st['coding'] else 'OFF'} (agent: {st['agent']})")
         return
     if cmd == "/computer":
@@ -1555,7 +1641,7 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
                 print(f"Unknown agent '{parts[1]}'. Available: {', '.join(agents.list_agents())}")
             else:
                 st["agent"] = a["name"]
-                st["coding"] = a["name"] == "coder"
+                st["coding"] = a["name"] == "agent_x"
                 print(f"Agent: {a['name']} ({a['role']})\n  {a['description']}")
         else:
             a = agents.get_agent(st["agent"])
@@ -1582,16 +1668,15 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
             tool_input = " ".join(parts[3:])
             print(f"  Calling MCP tool '{tool_name}'...")
             try:
-                from api import orchestrator as _orch
                 if tool_name == "chat":
-                    result = _orch.run(user_message=tool_input, conv_id=f"mcp-cli-{uuid.uuid4().hex[:8]}", use_planning=True)
+                    result = orch.run(user_message=tool_input, conv_id=f"mcp-cli-{uuid.uuid4().hex[:8]}", use_planning=True)
                     print(f"\n{_green('Response:')}\n{result['response']}")
                 elif tool_name in agents.AGENTS:
                     a = agents.get_agent(tool_name)
                     if a is None:
                         print(f"Unknown tool '{tool_name}'")
                         return
-                    result = _orch.run(user_message=tool_input, conv_id=f"mcp-cli-{uuid.uuid4().hex[:8]}",
+                    result = orch.run(user_message=tool_input, conv_id=f"mcp-cli-{uuid.uuid4().hex[:8]}",
                                        use_planning=True, system_override=a["system_prompt"])
                     print(f"\n{_green('Response:')}\n{result['response']}")
                 elif tool_name in agents.SKILLS:
@@ -1599,7 +1684,7 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
                     if rendered is None:
                         print(f"Unknown tool '{tool_name}'")
                         return
-                    result = _orch.run(user_message=rendered["prompt"], conv_id=f"mcp-cli-{uuid.uuid4().hex[:8]}",
+                    result = orch.run(user_message=rendered["prompt"], conv_id=f"mcp-cli-{uuid.uuid4().hex[:8]}",
                                        use_planning=False, system_override=rendered["system_prompt"])
                     print(f"\n{_green('Response:')}\n{result['response']}")
                 else:
@@ -1974,6 +2059,7 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
 # ---------- main loop ----------
 
 def main(model_manager=None):
+    _enable_utf8()
     _init_color()
     if model_manager is None:
         mm = ModelManager()
@@ -2031,6 +2117,18 @@ def main(model_manager=None):
             break
 
         if not line.strip():
+            continue
+
+        if line == "!!":
+            if not st["last_prompt"]:
+                print("Nothing to retry yet.")
+            else:
+                try:
+                    _ask(orch, st, tui=tui)
+                except KeyboardInterrupt:
+                    print(_yellow("\n[Stopped]"))
+                except Exception as e:
+                    print(_red(f"[Error] {e}"))
             continue
 
         if line.startswith("!") and not line.startswith("!!"):

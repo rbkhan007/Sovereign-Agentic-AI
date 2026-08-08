@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useId } from 'react';
 
 export default function Select({
   label,
@@ -19,11 +19,13 @@ export default function Select({
   hint?: string;
   className?: string;
 }) {
+  const id = useId();
   return (
     <div className={`flex flex-col gap-1.5 ${className}`}>
-      {label && <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">{label}</label>}
+      {label && <label htmlFor={id} className="text-xs font-medium text-text-secondary uppercase tracking-wider">{label}</label>}
       <div className="relative">
         <select
+          id={id}
           value={value}
           onChange={onChange}
           disabled={disabled}

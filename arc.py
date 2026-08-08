@@ -22,6 +22,8 @@ def parse_grid(text: str) -> List[List[int]]:
             data = json.loads(text)
             if isinstance(data, list) and all(isinstance(r, list) for r in data):
                 return [[int(c) for c in r] for r in data]
+            if isinstance(data, list) and all(isinstance(c, int) for c in data):
+                return [data]
         except Exception:
             pass
     rows = []

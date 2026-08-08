@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useId } from 'react';
 
 export default function Textarea({
   label,
@@ -21,10 +21,12 @@ export default function Textarea({
   hint?: string;
   className?: string;
 }) {
+  const id = useId();
   return (
     <div className={`flex flex-col gap-1.5 ${className}`}>
-      {label && <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">{label}</label>}
+      {label && <label htmlFor={id} className="text-xs font-medium text-text-secondary uppercase tracking-wider">{label}</label>}
       <textarea
+        id={id}
         value={value}
         onChange={onChange}
         placeholder={placeholder}

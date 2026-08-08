@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { Star, Download, Trash2, Search, Pencil, X } from 'lucide-react';
+import { Star, Download, Trash2, Search, Pencil, X, Check } from 'lucide-react';
 import { fetchJSON, toArray, type ChatMessage } from '@/lib/api';
 import { useToast } from '@/components/providers/ToastProvider';
+import { toEpochMs, formatRelativeTime } from '@/lib/time';
 
 export interface ConvoItem {
   id: string;
@@ -29,8 +30,9 @@ function loadMap(key: string): Record<string, string> {
 }
 
 function groupOf(ts?: number): 'today' | 'yesterday' | 'week' | 'older' {
-  if (!ts) return 'older';
-  const days = Math.floor((Date.now() - ts) / 86400000);
+  const ms = toEpochMs(ts);
+  if (ms == null) return 'older';
+  const days = Math.floor((Date.now() - ms) / 86400000);
   if (days <= 0) return 'today';
   if (days === 1) return 'yesterday';
   if (days <= 7) return 'week';
@@ -89,6 +91,7 @@ export default function ConversationsPanel({
   const [pins, setPins] = useState<Record<string, string>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const editRef = useRef<HTMLInputElement>(null);
   const discardRef = useRef(false);
@@ -116,7 +119,7 @@ export default function ConversationsPanel({
       else map[groupOf(c.created_at)].push(c);
     }
     for (const key of Object.keys(map) as GroupKey[]) {
-      map[key].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+      map[key].sort((a, b) => (toEpochMs(b.created_at) || 0) - (toEpochMs(a.created_at) || 0));
     }
     return map;
   }, [conversations, search, pins, renames, displayTitle]);
@@ -248,7 +251,7 @@ export default function ConversationsPanel({
                           <HighlightParts text={displayTitle(c)} query={search.trim()} />
                         </span>
                         <span className="text-[10px] text-text-muted mt-0.5 block">
-                          {c.created_at ? new Date(c.created_at).toLocaleDateString() : c.id.slice(0, 8)}
+                          {c.created_at ? formatRelativeTime(c.created_at) : c.id.slice(0, 8)}
                         </span>
                       </button>
                     )}
@@ -260,9 +263,20 @@ export default function ConversationsPanel({
                         <button onClick={() => startRename(c)} className="p-1 rounded hover:text-accent hover:bg-accent/10 transition-all" title="Rename" aria-label="Rename">
                           <Pencil size={12} />
                         </button>
-                        <button onClick={() => onDelete(c.id)} className="p-1 rounded hover:text-danger hover:bg-danger/10 transition-all" title="Delete" aria-label="Delete">
-                          <Trash2 size={12} />
-                        </button>
+                        {pendingDelete === c.id ? (
+                          <>
+                            <button onClick={() => { onDelete(c.id); setPendingDelete(null); }} className="p-1 rounded hover:text-danger hover:bg-danger/10 transition-all" title="Confirm delete" aria-label="Confirm delete">
+                              <Check size={12} />
+                            </button>
+                            <button onClick={() => setPendingDelete(null)} className="p-1 rounded hover:text-text-secondary hover:bg-bg-tertiary transition-all" title="Cancel" aria-label="Cancel delete">
+                              <X size={12} />
+                            </button>
+                          </>
+                        ) : (
+                          <button onClick={() => setPendingDelete(c.id)} className="p-1 rounded hover:text-danger hover:bg-danger/10 transition-all" title="Delete" aria-label="Delete">
+                            <Trash2 size={12} />
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

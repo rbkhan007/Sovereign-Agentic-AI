@@ -668,13 +668,34 @@ def _get_conn():
                     return conn
                 except Exception:
                     try:
-                        conn.close()
+                        pool.putconn(conn, close=True)
                     except Exception:
-                        pass
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+        # Every pooled connection is broken: tear the pool down so the
+        # background reconnect thread can rebuild it (otherwise the
+        # thread-keyed pool stays pinned to dead conns forever).
+        _mark_pool_down()
         return None
     except Exception as e:
         logger.warning(f"Get conn: {e}")
+        _mark_pool_down()
         return None
+
+
+def _mark_pool_down():
+    global _pool, _pool_down
+    with _pool_lock:
+        if _pool is not None:
+            try:
+                _pool.closeall()
+            except Exception:
+                pass
+        _pool = None
+        _pool_down = True
+        _start_reconnect_thread()
 
 
 def _put_conn(conn):
@@ -817,7 +838,9 @@ def retrieve_similar(query: str, limit: int = 5, agent_filter: Optional[str] = N
                 )
             elif workspace_id:
                 cur.execute(
-                    "SELECT thought, (embedding <=> %s::vector) AS dist FROM agent_memory WHERE workspace_id = %s ORDER BY dist LIMIT %s",
+                    "SELECT thought, (embedding <=> %s::vector) AS dist "
+                    "FROM agent_memory WHERE workspace_id = %s "
+                    "ORDER BY dist LIMIT %s",
                     (str(vec), workspace_id, limit),
                 )
             else:
@@ -1119,11 +1142,15 @@ def prune_memories(max_age_days: int = 30, workspace_id: Optional[str] = None):
         with conn.cursor() as cur:
             if workspace_id:
                 cur.execute(
-                    "DELETE FROM agent_memory WHERE workspace_id = %s AND created_at < NOW() - make_interval(days => %s)",
+                    "DELETE FROM agent_memory WHERE workspace_id = %s "
+                    "AND created_at < NOW() - make_interval(days => %s)",
                     (workspace_id, max_age_days),
                 )
             else:
-                cur.execute("DELETE FROM agent_memory WHERE created_at < NOW() - make_interval(days => %s)", (max_age_days,))
+                cur.execute(
+                    "DELETE FROM agent_memory WHERE created_at < NOW() - make_interval(days => %s)",
+                    (max_age_days,),
+                )
             deleted = cur.rowcount
             conn.commit()
             if deleted:
@@ -1146,7 +1173,10 @@ def _invalidate_cache():
         _query_cache_time.clear()
 
 
-def start_auto_prune(interval_hours: Optional[int] = None, max_age_days: Optional[int] = None) -> Optional[threading.Thread]:
+def start_auto_prune(
+    interval_hours: Optional[int] = None,
+    max_age_days: Optional[int] = None,
+) -> Optional[threading.Thread]:
     global _prune_thread
     interval = interval_hours or CONFIG.prune_interval_hours
     max_age = max_age_days or CONFIG.prune_max_age_days
@@ -1548,6 +1578,34 @@ def list_conversations(workspace_id: str = "default") -> List[Dict[str, Any]]:
         except Exception:
             pass
         return []
+    finally:
+        _put_conn(conn)
+
+
+def delete_conversation_messages_after(conv_id: str, after_ts: float = 0.0) -> bool:
+    """Delete messages appended after a timestamp (used to compensate a
+    rollback so the DB stays in sync with the in-memory conversation)."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM conversation_messages "
+                "WHERE conversation_id = %s AND timestamp >= %s",
+                (conv_id, after_ts),
+            )
+            cur.execute("UPDATE conversations SET updated_at = %s WHERE id = %s",
+                        (time.time(), conv_id))
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Delete conversation messages after: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
     finally:
         _put_conn(conn)
 

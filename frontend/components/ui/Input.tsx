@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useId } from 'react';
 
 export default function Input({
   label,
@@ -29,10 +29,12 @@ export default function Input({
   min?: string | number;
   max?: string | number;
 }) {
+  const id = useId();
   return (
     <div className={`flex flex-col gap-1.5 ${className}`}>
-      {label && <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">{label}</label>}
+      {label && <label htmlFor={id} className="text-xs font-medium text-text-secondary uppercase tracking-wider">{label}</label>}
       <input
+        id={id}
         type={type}
         value={value}
         onChange={onChange}

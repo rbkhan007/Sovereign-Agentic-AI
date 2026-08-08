@@ -13,6 +13,8 @@ import threading
 import re
 import collections
 import os
+import urllib.request
+import tempfile
 from typing import Optional, List, Dict, Any, Union
 from contextlib import asynccontextmanager
 
@@ -131,6 +133,27 @@ async def lifespan(app: FastAPI):
         hardware.get_hw_monitor(model_manager)
     except Exception as e:
         logger.warning(f"Hardware monitor failed to start: {e}")
+    # Startup preload: warm the default executor (+ strategist for planning) in
+    # the background so the first chat answers without paying a long model-load
+    # penalty. Never blocks boot; failures just mean a per-request load later.
+    if CONFIG.auto_load:
+        _preload_names: list = []
+        for _n in ([orchestrator.executor] + (["hy-mt2"] if "hy-mt2" in model_manager.configs else [])):
+            if _n in model_manager.configs and _n not in _preload_names:
+                _preload_names.append(_n)
+        if _preload_names:
+
+            def _preload():
+                try:
+                    _loaded = model_manager.load_many(
+                        _preload_names,
+                        keep=["hy-mt2"] if "hy-mt2" in model_manager.configs else [],
+                    )
+                    logger.info(f"Startup preload loaded: {_loaded}")
+                except Exception as e:
+                    logger.warning(f"Startup preload failed: {e}")
+
+            threading.Thread(target=_preload, daemon=True, name="startup-preload").start()
     if not CONFIG.db.enabled:
         try:
             import database as db
@@ -331,6 +354,12 @@ def _is_admin_mutation(method: str, path: str) -> bool:
         return True
     if path.startswith("/v1/chat/clear") or path.startswith("/v1/chat/conversations"):
         return True
+    if path.startswith("/v1/terminal/exec") or path.startswith("/v1/terminal/python"):
+        return True
+    if path.startswith("/v1/terminal/fs/write") or path.startswith("/v1/terminal/fs/delete"):
+        return True
+    if path.startswith("/v1/terminal/fs/mkdir"):
+        return True
     return False
 
 
@@ -482,6 +511,7 @@ def list_models():
             "role": mc.role,
             "n_ctx": mc.n_ctx,
             "loaded": loaded,
+            "capabilities": getattr(mc, "capabilities", []),
         })
     if CONFIG.openai.enabled:
         data.append({
@@ -491,6 +521,7 @@ def list_models():
             "owned_by": "openai",
             "n_ctx": 128000,
             "loaded": True,
+            "capabilities": ["general", "code", "chat"],
         })
     return {
         "object": "list",
@@ -517,6 +548,123 @@ def unload_model(name: str = Query(..., description="Model name to unload")):
         return {"status": "not_loaded", "model": name}
     model_manager.unload(name)
     return {"status": "unloaded", "model": name}
+
+
+@app.get("/v1/models/health")
+def models_health():
+    """Real-time model health: loaded instances, VRAM estimates, and status."""
+    health = []
+    for name, mc in model_manager.configs.items():
+        loaded = name in model_manager.instances
+        entry = {
+            "id": name,
+            "role": mc.role,
+            "loaded": loaded,
+            "n_ctx": mc.n_ctx,
+            "capabilities": getattr(mc, "capabilities", []),
+        }
+        if loaded:
+            entry["vram_mb"] = model_manager.vram_used()
+            entry["status"] = "ready"
+        else:
+            entry["status"] = "unloaded"
+        health.append(entry)
+    return {
+        "models": health,
+        "total_loaded": len(model_manager.instances),
+        "vram_budget_mb": CONFIG.vram_budget_mb,
+        "openai_enabled": CONFIG.openai.enabled,
+    }
+
+
+@app.get("/v1/models/installed")
+def installed_models():
+    """List .gguf files on disk with sizes."""
+    from config import MODELS_DIR
+    entries = []
+    if os.path.isdir(MODELS_DIR):
+        for fn in sorted(os.listdir(MODELS_DIR)):
+            if not fn.lower().endswith(".gguf"):
+                continue
+            path = os.path.join(MODELS_DIR, fn)
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+            entries.append({
+                "filename": fn,
+                "path": path,
+                "size_mb": round(size / (1024 * 1024), 1),
+                "size_bytes": size,
+            })
+    return {"models_dir": MODELS_DIR, "models": entries}
+
+
+@app.post("/v1/models/pull")
+async def pull_model(req: Request):
+    """Download a model file from a URL (HuggingFace or direct) with SSE progress."""
+    body = await req.json()
+    url = (body or {}).get("url", "").strip()
+    filename = (body or {}).get("filename", "").strip()
+    if not url:
+        raise HTTPException(400, "url required")
+
+    from config import MODELS_DIR
+    os.makedirs(MODELS_DIR, exist_ok=True)
+
+    if not filename:
+        filename = url.split("/")[-1] or "model.gguf"
+        if "?" in filename:
+            filename = filename.split("?")[0]
+        if not filename.lower().endswith(".gguf"):
+            filename += ".gguf"
+
+    dest = os.path.join(MODELS_DIR, filename)
+    if os.path.exists(dest):
+        raise HTTPException(409, f"File already exists: {filename}")
+
+    async def generate():
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".gguf")
+        os.close(tmp_fd)
+        total = 0
+        try:
+            req_obj = urllib.request.Request(url, headers={"User-Agent": "Sovereign-Agentic-AI/1.3"})
+            with urllib.request.urlopen(req_obj, timeout=30) as resp:
+                content_length = resp.headers.get("Content-Length")
+                total_size = int(content_length) if content_length and content_length.isdigit() else 0
+                with open(tmp_path, "wb") as f:
+                    while True:
+                        chunk = resp.read(1024 * 256)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        total += len(chunk)
+                        pct = round((total / total_size) * 100, 1) if total_size else 0
+                        progress_payload = {
+                            "type": "progress",
+                            "downloaded_mb": round(total / (1024 * 1024), 1),
+                            "total_mb": round(total_size / (1024 * 1024), 1),
+                            "percent": pct,
+                        }
+                        yield f"data: {json.dumps(progress_payload)}\n\n"
+            os.replace(tmp_path, dest)
+            complete_payload = {
+                "type": "complete",
+                "filename": filename,
+                "path": dest,
+                "size_mb": round(total / (1024 * 1024), 1),
+            }
+            yield f"data: {json.dumps(complete_payload)}\n\n"
+        except Exception as e:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
 
 # ---------- Memory API ----------
 
@@ -763,6 +911,24 @@ def rate_reset():
 def hardware_info(refresh: bool = False):
     import hardware
     return hardware.detect_hardware(force=refresh)
+
+
+@app.get("/v1/hardware/stream")
+async def hardware_stream():
+    """Stream live hardware readings (RAM, VRAM, CPU) as SSE."""
+    import hardware
+
+    async def generate():
+        while True:
+            try:
+                readings = hardware.live_readings()
+                yield f"data: {json.dumps(readings)}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
 
 # ---------- Config API ----------
 
@@ -1792,12 +1958,20 @@ class ComputerRunRequest(BaseModel):
     goal: str
     sandbox: bool = False
     max_steps: int = 25
+    protocol: str = "json"
 
     @field_validator('max_steps')
     @classmethod
     def validate_max_steps(cls, v):  # noqa: unused
         if v < 1 or v > 50:
             raise ValueError('max_steps must be between 1 and 50')
+        return v
+
+    @field_validator('protocol')
+    @classmethod
+    def validate_protocol(cls, v):  # noqa: unused
+        if v not in ("json", "actions"):
+            raise ValueError('protocol must be "json" or "actions"')
         return v
 
 
@@ -1807,11 +1981,13 @@ def computer_run(req: ComputerRunRequest):
     sandbox = _computer_sandbox(req)
     agent = create_computer_agent(model_manager, orchestrator,
                                   sandbox=sandbox, max_steps=req.max_steps,
+                                  protocol=req.protocol,
                                   allow_gui=bool(CONFIG.computer.get("allow_gui")))
     result = agent.run(req.goal)
     return {
         "success": result.success,
         "final_answer": result.final_answer,
+        "protocol": req.protocol,
         "steps": [{"step": s.step_num, "thought": s.thought[:200],
                     "tool": s.tool_name, "args": str(s.tool_args)[:500],
                     "result": s.tool_result.output[:500] if s.tool_result else None,
@@ -1831,6 +2007,7 @@ async def computer_stream(req: ComputerRunRequest):
     sandbox = _computer_sandbox(req)
     agent = create_computer_agent(model_manager, orchestrator,
                                   sandbox=sandbox, max_steps=req.max_steps,
+                                  protocol=req.protocol,
                                   allow_gui=bool(CONFIG.computer.get("allow_gui")))
 
     async def event_gen():
@@ -1929,7 +2106,7 @@ def _terminal_sandbox(req) -> bool:
 
 @app.post("/v1/terminal/exec")
 def terminal_exec(req: TerminalExecRequest):
-    from computer_agent import _is_dangerous, _sandbox_scoped
+    from computer_agent import _is_dangerous, _sandbox_scoped, _sandboxed_shell_ok
     if _is_dangerous(req.command):
         raise HTTPException(400, "Command blocked by dangerous-pattern guard")
     sandbox = _terminal_sandbox(req)
@@ -1939,6 +2116,8 @@ def terminal_exec(req: TerminalExecRequest):
         if not allowed:
             raise HTTPException(400, "Sandbox: working directory outside project blocked")
         cwd = ap
+        if not _sandboxed_shell_ok(req.command, cwd):
+            raise HTTPException(400, "Sandbox: command attempts to escape the project directory")
     try:
         import subprocess
         proc = subprocess.run(
@@ -1965,12 +2144,17 @@ def terminal_python(req: TerminalPythonRequest):
     from computer_agent import _tool_python_exec
     if not req.code.strip():
         raise HTTPException(400, "No code provided")
+    sandbox = _terminal_sandbox(req)
+    if sandbox:
+        raise HTTPException(403, "Python execution blocked in sandbox mode (off by default; "
+                                 "run with --allow-unsafe or sandbox off to enable)")
     try:
-        result = _tool_python_exec(req.code)
+        result = _tool_python_exec(req.code, timeout=req.timeout)
         return {
             "stdout": result.output,
             "stderr": "",
             "exit_code": 0 if result.success else 1,
+            "sandbox": sandbox,
         }
     except Exception as e:
         raise HTTPException(500, f"Python exec error: {e}")
@@ -1989,10 +2173,16 @@ def terminal_fs_read(req: TerminalFsReadRequest):
 
 @app.post("/v1/terminal/fs/write")
 def terminal_fs_write(req: TerminalFsWriteRequest):
-    from computer_agent import _tool_write_file
+    from computer_agent import _tool_write_file, _sandbox_scoped
+    sandbox = _terminal_sandbox(req)
+    if sandbox:
+        allowed, ap = _sandbox_scoped(req.path)
+        if not allowed:
+            raise HTTPException(400, "Sandbox: write outside project directory blocked")
+        req.path = ap
     try:
         result = _tool_write_file(req.path, req.content, req.append)
-        return {"ok": result.success, "message": result.output, "path": req.path}
+        return {"ok": result.success, "message": result.output, "path": req.path, "sandbox": sandbox}
     except Exception as e:
         raise HTTPException(500, f"Write error: {e}")
 
@@ -2328,9 +2518,61 @@ def chat_completion(req: ChatRequest):
     workspace_id = (req.workspace_id or "default").strip() or "default"
     conv_id, user_msg, system_override = _resolve_conversation(req, workspace_id)
     user_msg, system_override = _apply_agent_skill(req, user_msg, system_override)
+
+    workflow = None
+    if req.agent:
+        try:
+            from router import agent_workflow
+            workflow = agent_workflow(req.agent)
+        except Exception:
+            pass
+
+    if workflow == "auto_approved":
+        if req.stream:
+            return chat_auto_stream_workflow(req)
+        return _workflow_response(req, user_msg, conv_id, workspace_id)
+
     if req.stream:
         return _stream_response(req, user_msg, conv_id, system_override, workspace_id)
     return _full_response(req, user_msg, conv_id, system_override, workspace_id)
+
+
+def _workflow_response(req, user_msg, conv_id, workspace_id):
+    try:
+        result = orchestrator.run_auto_approved_workflow(
+            goal=user_msg,
+            conv_id=conv_id,
+            workspace_id=workspace_id,
+            max_steps=min(req.max_tokens or 25, 50),
+            step_timeout_s=min(req.max_tokens * 2 or 120, 300),
+        )
+    except Exception as e:
+        logger.exception("Workflow error")
+        raise _api_error(e)
+    content = result.get("result") or ""
+    usage_model = result.get("executor") or req.model or "local"
+    prompt_tokens = model_manager.count_tokens(user_msg, usage_model)
+    completion_tokens = model_manager.count_tokens(content, usage_model)
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": usage_model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+        "conversation_id": conv_id,
+        "workflow_steps": result.get("steps", 0),
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
 
 
 def _full_response(req, user_msg, conv_id, system, workspace_id):
@@ -2589,6 +2831,52 @@ async def chat_auto_stream(req: ChatRequest):
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
+
+@app.post("/v1/chat/auto-stream/workflow")
+async def chat_auto_stream_workflow(req: ChatRequest):
+    """GBNF-constrained auto-approved workflow endpoint.
+
+    Runs the planner -> executor -> judge -> memory loop and streams
+    structured trace events (plan, trace, complete, error) as SSE.
+    """
+    if not req.messages:
+        raise HTTPException(400, "messages required")
+    user_msg = req.messages[-1].get("content", "")
+    if not user_msg:
+        raise HTTPException(400, "empty message")
+    workspace_id = (req.workspace_id or "default").strip() or "default"
+    conv_id, _, system_override = _resolve_conversation(req, workspace_id)
+
+    async def generate():
+        queue = asyncio.Queue()
+        stop = threading.Event()
+        task = asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: orchestrator.run_auto_approved_workflow(
+                goal=user_msg,
+                conv_id=conv_id,
+                workspace_id=workspace_id,
+                event_callback=lambda evt: queue.put_nowait(evt),
+                max_steps=min(req.max_tokens or 25, 50),
+                step_timeout_s=min(req.max_tokens * 2 or 120, 300),
+            ),
+        )
+        try:
+            while True:
+                evt = await queue.get()
+                if evt.get("type") in ("complete", "error"):
+                    yield f"data: {json.dumps(evt)}\n\n"
+                    break
+                yield f"data: {json.dumps(evt)}\n\n"
+        finally:
+            stop.set()
+            if not task.done():
+                task.cancel()
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
 # ---------- Chat file uploads ----------
 
 @app.post("/v1/chat/upload")
@@ -2765,6 +3053,12 @@ class SkillCreateRequest(BaseModel):
     description: str = ""
     params: List[Dict[str, Any]] = []
 
+class AutoAgentRequest(BaseModel):
+    goal: str
+    workspace: str = "."
+    max_steps: int = 25
+    model: str = ""
+
 @app.get("/v1/agents")
 def list_agents():
     import agents
@@ -2806,6 +3100,42 @@ def run_agent(name: str, req: AgentRunRequest):
         return {"agent": name, "response": result["response"], "model": result.get("model")}
     except Exception as e:
         raise _api_error(e)
+
+
+@app.post("/v1/agent/auto")
+async def auto_agent(req: AutoAgentRequest):
+    """GBNF-constrained auto-approved agent endpoint (SSE)."""
+    if not req.goal.strip():
+        raise HTTPException(400, "goal required")
+
+    async def generate():
+        queue = asyncio.Queue()
+        stop = threading.Event()
+        task = asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: orchestrator.run_auto_approved_workflow(
+                goal=req.goal,
+                conv_id=f"auto-{uuid.uuid4().hex[:8]}",
+                workspace_id=req.workspace or "default",
+                event_callback=lambda evt: queue.put_nowait(evt),
+                max_steps=min(req.max_steps, 50),
+            ),
+        )
+        try:
+            while True:
+                evt = await queue.get()
+                if evt.get("type") in ("complete", "error"):
+                    yield f"data: {json.dumps(evt)}\n\n"
+                    break
+                yield f"data: {json.dumps(evt)}\n\n"
+        finally:
+            stop.set()
+            if not task.done():
+                task.cancel()
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
 
 @app.get("/v1/skills")
 def list_skills():
@@ -3352,6 +3682,13 @@ class HealingRequest(BaseModel):
     code: str
     context: str = ""
     timeout_s: Optional[int] = None
+
+    @field_validator('timeout_s')
+    @classmethod
+    def _cap_heal_timeout(cls, v):  # noqa: unused
+        if v is not None and (v < 1 or v > 120):
+            raise ValueError('timeout_s must be between 1 and 120')
+        return v
 
 
 @app.get("/v1/healing/config")

@@ -26,7 +26,14 @@ import database as db
 logger = logging.getLogger(__name__)
 
 _NODE_TYPES = ("document", "conversation", "memory", "concept", "tag")
-_EMBED_DIM = 384
+
+
+def _embed_dim() -> int:
+    try:
+        return int(db.embed_dim())
+    except Exception:
+        return 384
+
 _SCHEMA_ENSURE_LOCK = threading.Lock()
 _SCHEMA_DONE = threading.Event()
 
@@ -111,7 +118,7 @@ def ensure_schema(conn=None):
                             node_type TEXT NOT NULL,
                             title TEXT NOT NULL,
                             content TEXT,
-                            embedding vector({_EMBED_DIM}),
+                            embedding vector({_embed_dim()}),
                             metadata JSONB DEFAULT '{{}}'::jsonb,
                             workspace_id TEXT DEFAULT 'default',
                             created_at TIMESTAMPTZ DEFAULT NOW()
@@ -144,7 +151,7 @@ def ensure_schema(conn=None):
                         CREATE TABLE IF NOT EXISTS tags (
                             id BIGSERIAL PRIMARY KEY,
                             name TEXT UNIQUE NOT NULL,
-                            embedding vector({_EMBED_DIM}),
+                            embedding vector({_embed_dim()}),
                             metadata JSONB DEFAULT '{{}}'::jsonb
                         )
                     """)
@@ -957,7 +964,10 @@ def graph_stats() -> Dict[str, Any]:
             tags = cur.fetchone()[0] or 0
             cur.execute("SELECT node_type, COUNT(*) FROM nodes GROUP BY node_type")
             types = {r[0]: r[1] for r in cur.fetchall()}
-            cur.execute("SELECT COALESCE(AVG(degree), 0) FROM (SELECT COUNT(*) AS degree FROM edges GROUP BY source_id) d")
+            cur.execute(
+                "SELECT COALESCE(AVG(degree), 0) FROM "
+                "(SELECT COUNT(*) AS degree FROM edges GROUP BY source_id) d"
+            )
             avg_deg = float(cur.fetchone()[0] or 0.0)
         return {
             "enabled": True, "nodes": nodes, "edges": edges, "tags": tags,

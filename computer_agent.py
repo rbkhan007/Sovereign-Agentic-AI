@@ -11,7 +11,6 @@ import os
 import platform
 import re
 import subprocess
-import sys
 import textwrap
 import time
 from dataclasses import dataclass
@@ -25,11 +24,13 @@ _DANGEROUS_CMDS = {
     "rm -rf /", "rm -rf /*", "mkfs", "format c:", "format /q c:",
     ":(){ :|:& };:", "dd if=", "> /dev/sd", "chmod -R 777 /",
     "shutdown", "reboot", "halt", "init 0", "init 6", "rd /s", "rmdir /s",
+    "sudo ", "sudo rm", "sudo mkfs", "sudo dd",
 }
 
 _DANGEROUS_TOKENS = {
     "shutdown", "reboot", "halt", "mkfs", "diskpart", "format",
     "dd", "del", "erase", "rd", "rmdir", "deltree", "rm", "remove", "unlink",
+    "sudo",
 }
 
 _MAX_TOOL_OUTPUT = 8000
@@ -43,11 +44,42 @@ def _sandbox_scoped(path: str, root: str = BASE_DIR) -> tuple:
     In sandbox mode file reads/listings must stay within the project tree so
     the read-only agent cannot exfiltrate arbitrary files (e.g. C:\\Users\\...
     or .env files outside the project).
+
+    ``realpath`` resolves symlinks/junctions so a link inside the project
+    pointing outside cannot be used to escape the sandbox.
     """
-    ap = os.path.abspath(os.path.expanduser(path))
-    if ap == root or ap.startswith(root + os.sep):
+    ap = os.path.realpath(os.path.expanduser(path))
+    root_real = os.path.realpath(root)
+    if ap == root_real or ap.startswith(root_real + os.sep):
         return True, ap
     return False, ap
+
+
+def _sandboxed_shell_ok(command: str, cwd: str = BASE_DIR) -> bool:
+    """Return True when a shell command can stay inside the sandbox.
+
+    A ``shell=True`` subprocess with a scoped ``cwd`` is not isolation on its
+    own — ``..\\`` traversal, drive-absolute paths and UNC paths can all walk
+    out of the project. This guard rejects those escapes so the "sandboxed
+    shell" really is project-confined. Legit project commands (``dir``,
+    ``git status``, ``python script.py``, ``npm test``) pass untouched.
+    """
+    if not command or not command.strip():
+        return False
+    low = command.lower()
+    # Parent-directory traversal (also escaped forms).
+    if "..\\" in low or "../" in low or ".. /" in low or ".. \\" in low:
+        return False
+    # Drive-absolute / UNC paths that bypass the scoped cwd.
+    import re as _re
+    if _re.search(r"(^|[^\w])[a-z]:\\", low):
+        return False
+    if low.startswith("\\\\") or " \\\\" in low or "\t\\\\" in low:
+        return False
+    # An explicit `cd` to an absolute location or up the tree escapes.
+    if _re.search(r"\bcd\s+(/[\\/][^\\s]|[a-z]:)", low):
+        return False
+    return True
 
 
 @dataclass
@@ -297,6 +329,11 @@ def _tool_web_fetch(url: str, max_chars: int = 15000) -> ToolResult:
     try:
         import urllib.request
         import urllib.error
+        from urllib.parse import urlparse
+        scheme = (urlparse(url).scheme or "").lower()
+        if scheme not in ("http", "https"):
+            return ToolResult(False, f"Blocked: only http/https URLs are allowed (got '{scheme or 'none'}'). "
+                                     f"file:// and other schemes are disabled.")
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (compatible; AgenticLLM/1.0)"
         })
@@ -393,29 +430,46 @@ def _tool_process_list(filter_name: str = "", max_results: int = 30) -> ToolResu
         return ToolResult(False, f"Process list error: {e}")
 
 
-def _tool_python_exec(code: str) -> ToolResult:
-    try:
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-        import io
-        buf = io.StringIO()
-        sys.stdout = buf
-        sys.stderr = buf
+def _tool_python_exec(code: str, timeout: float = 30.0) -> ToolResult:
+    """Execute Python with a hard timeout and per-call captured output.
+
+    The code runs in a helper thread with redirected stdout/stderr, so an
+    infinite loop cannot hang the caller (the worker is daemonized and simply
+    abandoned on timeout) and concurrent calls never clobber each other's
+    captured output.
+    """
+    import io
+    import queue
+    import threading
+    import traceback
+    from contextlib import redirect_stderr, redirect_stdout
+
+    result_q: queue.Queue = queue.Queue(maxsize=1)
+    buf = io.StringIO()
+
+    def _run():
         try:
             compiled = compile(code, "<agent>", "exec")
-            exec(compiled, {"__builtins__": __builtins__})  # nosec B102  # pylint: disable=W0122
+            with redirect_stdout(buf), redirect_stderr(buf):
+                exec(compiled, {"__builtins__": __builtins__})  # nosec B102  # pylint: disable=W0122
         except Exception:
-            import traceback
             traceback.print_exc(file=buf)
         finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-        output = buf.getvalue()
-        if not output.strip():
-            output = "[executed successfully, no output]"
-        return ToolResult(True, _truncate(output))
-    except Exception as e:
-        return ToolResult(False, f"Python exec error: {e}")
+            try:
+                result_q.put_nowait(buf.getvalue())
+            except queue.Full:
+                pass
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=timeout)
+    try:
+        output = result_q.get_nowait()
+    except queue.Empty:
+        return ToolResult(False, f"Python execution timed out after {timeout}s")
+    if not output.strip():
+        output = "[executed successfully, no output]"
+    return ToolResult(True, _truncate(output))
 
 
 def _tool_process_kill(pid: int) -> ToolResult:
@@ -806,6 +860,9 @@ class ToolRegistry:
 _AGENT_SYSTEM_PROMPT = textwrap.dedent("""\
 You are an AI computer-use agent. You can interact with the computer to accomplish tasks.
 
+PROJECT INDEX (file tree):
+{tree}
+
 AVAILABLE TOOLS:
 {tools}
 
@@ -843,6 +900,116 @@ TASK COMPLETE: Found 5 Python files: api.py, cli.py, config.py, models.py, run.p
 _TASK_COMPLETE_PREFIX = "TASK COMPLETE:"
 _TERMINATOR_FENCE = "```tool"
 _TASK_DONE_PATTERN = re.compile(r"TASK COMPLETE:\s*(.*)", re.DOTALL)
+
+
+# ---------- Auto environment scan (project tree injection) ----------
+
+_TREE_EXCLUDE_DIRS = {
+    ".git", "node_modules", "__pycache__", "venv", "env", ".venv", "build",
+    "dist", "generated", "sessions", "lora_datasets", "models", ".next",
+    ".cache", "site-packages", "arc", "node_modules",
+}
+
+
+def _fmt_size(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _project_tree_text(root: Optional[str] = None, depth: int = 3,
+                       max_nodes: int = 200, max_chars: int = 4000) -> str:
+    """Build a compact text tree of the project for the agent's system prompt.
+
+    Heavy/irrelevant dirs (node_modules, .git, models, build, ...) are skipped
+    so a small local model's context window is not exhausted by the scan before
+    it starts reasoning. ``max_nodes`` and ``max_chars`` keep the injected
+    listing small enough to coexist with a 2k-4k context.
+    """
+    if root is None:
+        root = BASE_DIR
+    root_abs = os.path.abspath(root)
+    lines: List[str] = [os.path.basename(root_abs) + "/"]
+    count = [0]
+
+    def walk(cur: str, level: int):
+        if level > depth or count[0] >= max_nodes:
+            return
+        try:
+            entries = sorted(
+                os.listdir(cur),
+                key=lambda e: (not os.path.isdir(os.path.join(cur, e)), e.lower()),
+            )
+        except (PermissionError, OSError):
+            return
+        for e in entries:
+            if count[0] >= max_nodes:
+                return
+            if e.startswith("."):
+                continue
+            full = os.path.join(cur, e)
+            is_dir = os.path.isdir(full)
+            if is_dir and e in _TREE_EXCLUDE_DIRS:
+                continue
+            try:
+                size = os.path.getsize(full) if not is_dir else 0
+            except OSError:
+                size = 0
+            prefix = "  " * level + ("+ " if is_dir else "- ")
+            suffix = f"/ ({_fmt_size(size)})" if is_dir else f" ({_fmt_size(size)})"
+            lines.append(f"{prefix}{e}{suffix}")
+            count[0] += 1
+            if is_dir and level < depth:
+                walk(full, level + 1)
+
+    walk(root_abs, 1)
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n... (tree truncated)"
+    return text
+
+
+# ---------- GBNF grammar-constrained [BASH]/[READ]/[WRITE]/[DONE] protocol ----------
+
+_ACTION_GRAMMAR = r"""
+root ::= action
+action ::= think | bash | read | write | done
+think ::= "[THINK]:" rest
+bash  ::= "[BASH]:" rest
+read  ::= "[READ]:" rest
+write ::= "[WRITE]:" rest
+done  ::= "[DONE]:" rest
+rest  ::= rest_char rest | ""
+rest_char ::= [ -~] | "\n" | "\t" | "\r"
+"""
+
+_ACTION_LINE_RE = re.compile(r"^\s*\[(THINK|BASH|READ|WRITE|DONE)\]:\s*(.*?)\s*$")
+
+_ACTIONS_SYSTEM_PROMPT = textwrap.dedent("""\
+You are an autonomous coding agent that works directly on this machine.
+
+PROJECT INDEX (file tree):
+{tree}
+
+AVAILABLE ACTIONS (output EXACTLY one bracket action line per step):
+[THINK]: your brief reasoning about the next step
+[BASH]: the exact shell command to run
+[READ]: the path of a file to read
+[WRITE]: the path of a file to write
+  <the COMPLETE new file content follows on the lines after the [WRITE] line>
+[DONE]: a summary of what was accomplished
+
+RULES:
+1. Start by inspecting: [READ] relevant files and run [BASH] commands
+   (dir/ls, git status) to understand the codebase before changing anything.
+2. Output exactly ONE action per step and wait for the result before the next step.
+3. When a [BASH] command returns an error, read the traceback, fix the code, and re-run until it passes.
+4. [WRITE] must be followed by the FULL file content, ending before the next action line.
+5. Only emit [DONE] once the task is verified working and complete.
+6. Never run destructive commands (rm -rf /, format, shutdown, mkfs).
+""")
 
 
 def _balanced_json_block(text: str) -> Optional[str]:
@@ -904,20 +1071,35 @@ class AgentResult:
 class ComputerAgent:
     def __init__(self, model_manager, orchestrator,
                  sandbox: bool = False, max_steps: int = _MAX_STEPS,
-                 allow_gui: bool = False):
+                 allow_gui: bool = False, protocol: str = "json",
+                 scan_tree: bool = True):
         self.model_manager = model_manager
         self.orchestrator = orchestrator
         self.registry = ToolRegistry(sandbox=sandbox, allow_gui=allow_gui)
         self.sandbox = sandbox
         self.allow_gui = allow_gui
         self.max_steps = max_steps
+        self.protocol = protocol
+        self.scan_tree = scan_tree
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
     def _build_system_prompt(self) -> str:
-        return _AGENT_SYSTEM_PROMPT.format(tools=self.registry.tool_schemas())
+        tree = ""
+        if self.scan_tree:
+            try:
+                tree = _project_tree_text()
+            except Exception as e:  # never let a scan failure block the agent
+                logger.warning(f"Project tree scan failed: {e}")
+                tree = ""
+        if self.protocol == "actions":
+            return _ACTIONS_SYSTEM_PROMPT.format(tree=tree or "(unavailable)")
+        return _AGENT_SYSTEM_PROMPT.format(
+            tools=self.registry.tool_schemas(),
+            tree=tree or "(unavailable)",
+        )
 
     def _parse_tool_call(self, text: str) -> Optional[tuple]:
         raw = _balanced_json_block(text)
@@ -930,6 +1112,64 @@ class ComputerAgent:
             return (tool_name, args)
         except (json.JSONDecodeError, AttributeError):
             return None
+
+    def _parse_action_response(self, text: str) -> Optional[tuple]:
+        """Parse a GBNF-constrained bracket action into (action, payload, content).
+
+        ``content`` is only set for WRITE (the lines after the [WRITE]: path line,
+        up to the next action line or end of response).
+        """
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            m = _ACTION_LINE_RE.match(line)
+            if not m:
+                continue
+            action = m.group(1)
+            payload = m.group(2).strip()
+            if action == "WRITE":
+                content_lines: List[str] = []
+                for rest in lines[i + 1:]:
+                    if _ACTION_LINE_RE.match(rest):
+                        break
+                    content_lines.append(rest)
+                content = "\n".join(content_lines).rstrip("\n")
+                return (action, payload, content)
+            return (action, payload, None)
+        return None
+
+    def _interpret_response(self, response: str) -> tuple:
+        """Classify an agent response into a step directive.
+
+        Returns one of:
+          ("done", answer)
+          ("tool", tool_name, tool_args, thought)
+          ("think", thought_text)
+          ("invalid", retry_instruction)
+        """
+        if self.protocol == "actions":
+            parsed = self._parse_action_response(response)
+            if parsed is None:
+                return ("invalid", "Invalid output. Emit exactly one action line: "
+                        "[THINK]: .., [BASH]: .., [READ]: .., [WRITE]: .. (content after) or [DONE]: ..")
+            action, payload, content = parsed
+            if action == "THINK":
+                return ("think", payload)
+            if action == "DONE":
+                return ("done", payload)
+            if action == "BASH":
+                return ("tool", "shell", {"command": payload}, payload)
+            if action == "READ":
+                return ("tool", "read_file", {"path": payload}, payload)
+            if action == "WRITE":
+                return ("tool", "write_file", {"path": payload, "content": content or ""}, payload)
+            return ("invalid", "Unknown action.")
+        final = self._parse_final_answer(response)
+        if final:
+            return ("done", final)
+        tool_call = self._parse_tool_call(response)
+        if tool_call is None:
+            return ("invalid", "Please use a tool in the format: ```tool\n{\"tool\": \"name\", \"args\": {...}}\n```")
+        return ("tool", tool_call[0], tool_call[1], self._extract_thought(response))
 
     def _parse_final_answer(self, text: str) -> Optional[str]:
         match = _TASK_DONE_PATTERN.search(text)
@@ -964,6 +1204,7 @@ class ComputerAgent:
         model_name = self.orchestrator._resolve_executor(None)
         last_answer = ""
         task_done = False
+        pending_thought = ""
 
         for step_num in range(1, self.max_steps + 1):
             if self._cancelled:
@@ -973,33 +1214,39 @@ class ComputerAgent:
             context = conv.get_context()
 
             try:
-                response = self.model_manager.generate(
-                    model_name, context,
-                    max_tokens=1024,
-                    temperature=0.2,
-                )
+                kwargs: dict = dict(max_tokens=1024, temperature=0.2)
+                if self.protocol == "actions":
+                    kwargs["grammar"] = _ACTION_GRAMMAR
+                response = self.model_manager.generate(model_name, context, **kwargs)
             except Exception as e:
                 logger.error(f"Agent generation failed: {e}")
                 break
 
-            thought = self._extract_thought(response)
-            step = AgentStep(step_num=step_num, thought=thought)
+            directive = self._interpret_response(response)
+            kind = directive[0]
 
-            final_answer = self._parse_final_answer(response)
-            if final_answer:
+            if kind == "done":
+                step = AgentStep(step_num=step_num, thought=(pending_thought + " " + directive[1]).strip()[:200])
                 step.elapsed_s = time.time() - step_start
                 steps.append(step)
-                last_answer = final_answer
+                last_answer = directive[1]
                 task_done = True
                 break
 
-            tool_call = self._parse_tool_call(response)
-            if tool_call is None:
+            if kind == "think":
+                pending_thought = (pending_thought + " " + directive[1]).strip()
                 conv.add("assistant", response)
-                conv.add("user", "Please use a tool in the format: ```tool\n{\"tool\": \"name\", \"args\": {...}}\n```")
                 continue
 
-            tool_name, tool_args = tool_call
+            if kind == "invalid":
+                conv.add("assistant", response)
+                conv.add("user", directive[1])
+                continue
+
+            tool_name, tool_args, thought = directive[1], directive[2], directive[3]
+            step = AgentStep(step_num=step_num,
+                             thought=(pending_thought + " " + thought).strip() if pending_thought else thought)
+            pending_thought = ""
             step.tool_name = tool_name
             step.tool_args = tool_args
 
@@ -1047,6 +1294,7 @@ class ComputerAgent:
         conv.add("user", f"Goal: {goal}\n\nBegin working on this task. Think step by step and use tools as needed.")
 
         model_name = self.orchestrator._resolve_executor(None)
+        pending_thought = ""
 
         for step_num in range(1, self.max_steps + 1):
             if self._cancelled:
@@ -1057,30 +1305,47 @@ class ComputerAgent:
             full_response = ""
 
             try:
-                for chunk in self.model_manager.generate_stream(model_name, context, max_tokens=1024, temperature=0.2):
+                kwargs: dict = dict(max_tokens=1024, temperature=0.2)
+                if self.protocol == "actions":
+                    kwargs["grammar"] = _ACTION_GRAMMAR
+                for chunk in self.model_manager.generate_stream(model_name, context, **kwargs):
                     full_response += chunk
                     yield {"type": "thinking", "content": chunk}
             except Exception as e:
                 yield {"type": "error", "content": str(e)}
                 break
 
-            thought = self._extract_thought(full_response)
-            step = AgentStep(step_num=step_num, thought=thought)
+            directive = self._interpret_response(full_response)
+            kind = directive[0]
 
-            final_answer = self._parse_final_answer(full_response)
-            if final_answer:
+            if kind == "done":
+                step = AgentStep(step_num=step_num, thought=(pending_thought + " " + directive[1]).strip()[:200])
                 step.elapsed_s = time.time() - step_start
                 steps.append(step)
-                yield {"type": "complete", "answer": final_answer, "steps": len(steps)}
+                yield {"type": "complete", "answer": directive[1], "steps": len(steps),
+                       "protocol": self.protocol}
                 return
 
-            tool_call = self._parse_tool_call(full_response)
-            if tool_call is None:
+            if kind == "think":
+                pending_thought = (pending_thought + " " + directive[1]).strip()
                 conv.add("assistant", full_response)
-                conv.add("user", "Please use a tool in the format: ```tool\n{\"tool\": \"name\", \"args\": {...}}\n```")
                 continue
 
-            tool_name, tool_args = tool_call
+            if kind == "invalid":
+                conv.add("assistant", full_response)
+                conv.add("user", directive[1])
+                continue
+
+            tool_name, tool_args, thought = directive[1], directive[2], directive[3]
+
+            if self.protocol == "actions":
+                display = str(tool_args.get("command") or tool_args.get("path") or "")
+                yield {"type": "action", "action": tool_name.upper(), "payload": display[:200],
+                       "step": step_num}
+
+            step = AgentStep(step_num=step_num,
+                             thought=(pending_thought + " " + thought).strip() if pending_thought else thought)
+            pending_thought = ""
             step.tool_name = tool_name
             step.tool_args = tool_args
 
@@ -1103,11 +1368,14 @@ class ComputerAgent:
 
         total_elapsed = time.time() - start
         answer = f"Agent completed {len(steps)} steps in {total_elapsed:.1f}s"
-        yield {"type": "complete", "answer": answer, "steps": len(steps)}
+        yield {"type": "complete", "answer": answer, "steps": len(steps),
+               "protocol": self.protocol}
 
 
 def create_computer_agent(model_manager, orchestrator, sandbox: bool = False,
                           max_steps: int = _MAX_STEPS,
-                          allow_gui: bool = False) -> ComputerAgent:
+                          allow_gui: bool = False, protocol: str = "json",
+                          scan_tree: bool = True) -> ComputerAgent:
     return ComputerAgent(model_manager, orchestrator, sandbox=sandbox,
-                         max_steps=max_steps, allow_gui=allow_gui)
+                         max_steps=max_steps, allow_gui=allow_gui,
+                         protocol=protocol, scan_tree=scan_tree)

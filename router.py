@@ -263,3 +263,15 @@ class ModelRouter:
             return model_override
         ranked = self.rank_for_task(task)
         return ranked[0] if ranked else ""
+
+
+def agent_workflow(agent_name: str) -> Optional[str]:
+    """Return the workflow type for an agent, if any."""
+    try:
+        import agents as _agents
+        a = _agents.get_agent(agent_name)
+        if a:
+            return a.get("workflow")
+    except Exception:
+        pass
+    return None

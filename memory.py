@@ -103,11 +103,23 @@ class Conversation:
 
         Used to undo the user turn when generation fails. Because the index is
         captured before the user message is added, a concurrent request sharing
-        this conversation can never pop another thread's message.
+        this conversation can never pop another thread's message. The DB
+        compensation deletes rows at-or-after the first rolled-back message's
+        in-memory timestamp (the DB row timestamps are written strictly later,
+        so the last kept message is never over-deleted).
         """
+        removed_ts = 0.0
         with self._lock:
             if 0 <= index < len(self.messages):
+                removed_ts = self.messages[index].timestamp or 0.0
                 del self.messages[index:]
+            else:
+                return
+        if self._persist:
+            try:
+                self._persist("rollback", {"after_ts": removed_ts})
+            except Exception:
+                pass
 
 
 class MemoryManager:
@@ -145,6 +157,10 @@ class MemoryManager:
                     )
                 elif event == "system":
                     db.save_conversation(conv_id, ws, system_prompt=data.get("prompt"))
+                elif event == "rollback":
+                    db.delete_conversation_messages_after(
+                        conv_id, data.get("after_ts") or 0.0
+                    )
                 elif event == "clear":
                     db.clear_conversation_messages(conv_id)
             except Exception:

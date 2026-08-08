@@ -139,9 +139,9 @@ class DataScienceAgent:
         csv_path = None
         automl = None
         start = time.time()
+        if not _TRAINING_LOCK.acquire(timeout=1):
+            return {"error": "Another AutoML training job is already running. Please wait."}
         try:
-            if not _TRAINING_LOCK.acquire(timeout=1):
-                return {"error": "Another AutoML training job is already running. Please wait."}
             import pandas as pd  # noqa: PLC0415
             import autosklearn  # noqa: PLC0415
             import autosklearn.classification  # noqa: PLC0415

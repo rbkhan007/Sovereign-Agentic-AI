@@ -274,11 +274,9 @@ class ModelManager:
             _record_load_error(name, str(e))
             raise
 
-    def get(self, name: str) -> Optional[Llama]:
-        return self.instances.get(name)
-
     def generate(self, name: str, prompt: str, max_tokens: Optional[int] = None,
-                 temperature: Optional[float] = None, stop: Optional[list] = None) -> str:
+                 temperature: Optional[float] = None, stop: Optional[list] = None,
+                 grammar: Optional[str] = None) -> str:
         lock = self._get_lock(name)
         with lock:
             try:
@@ -295,6 +293,8 @@ class ModelManager:
                 temperature=temperature if temperature is not None else mc.temperature,
                 top_p=mc.top_p, echo=False, stop=stop or None,
             )
+            if grammar:
+                kwargs["grammar"] = grammar
             start = time.time()
             ex = self._get_executor(name)
             fut = ex.submit(llm, **kwargs)
@@ -314,10 +314,15 @@ class ModelManager:
                     return self._openai_fallback(prompt, max_tokens)
                 raise RuntimeError(f"Generate on {name} failed: {e}") from e
             try:
-                text = response["choices"][0]["text"].strip()  # type: ignore[index]
+                choices = response.get("choices") or []
+                if not choices:
+                    raise ValueError("Empty choices from model")
+                text = (choices[0].get("text") or "").strip()
+                if not text:
+                    raise ValueError("Empty text from model")
             except Exception as e:
                 _metrics.record_completion(model=name, ok=False)
-                logger.error(f"Generate on {name} failed: {e}; reloading on next call")
+                logger.error(f"Generate on {name} returned bad response: {e}; reloading on next call")
                 self.instances.pop(name, None)
                 _untouch(name)
                 if CONFIG.openai.enabled:
@@ -329,7 +334,8 @@ class ModelManager:
             return text
 
     def generate_stream(self, name: str, prompt: str, max_tokens: Optional[int] = None,
-                        temperature: Optional[float] = None, stop: Optional[list] = None):
+                        temperature: Optional[float] = None, stop: Optional[list] = None,
+                        grammar: Optional[str] = None):
         lock = self._get_lock(name)
         with lock:
             try:
@@ -348,6 +354,8 @@ class ModelManager:
                 top_p=mc.top_p, echo=False, stop=stop or None,
                 stream=True,
             )
+            if grammar:
+                kwargs["grammar"] = grammar
             start = time.time()
             parts = []
             err = []
@@ -357,7 +365,10 @@ class ModelManager:
             def _run():
                 try:
                     for chunk in llm(**kwargs):
-                        piece = chunk["choices"][0]["text"]
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        piece = choices[0].get("text") or ""
                         if piece:
                             parts.append(piece)
                             if _stop.is_set():
@@ -578,8 +589,9 @@ class ModelManager:
             if name in self.instances:
                 _touch(name)
                 continue
-            if budget and self.vram_used() + self.get_vram_estimate(name) > budget:
-                self._unload_for_budget(budget, keep)
+            estimate = self.get_vram_estimate(name)
+            if budget and self.vram_used() + estimate > budget:
+                self._unload_for_budget(budget, keep, extra=estimate)
             try:
                 self.load(name)
                 _touch(name)
@@ -604,9 +616,9 @@ class ModelManager:
         self.load(name)
         _touch(name)
 
-    def _unload_for_budget(self, budget: int, keep: set):
+    def _unload_for_budget(self, budget: int, keep: set, extra: int = 0):
         guard = 0
-        while budget > 0 and self.vram_used() > budget:
+        while budget > 0 and self.vram_used() + extra > budget:
             victim = _least_recently_used(except_names=keep)
             if victim is None:
                 break

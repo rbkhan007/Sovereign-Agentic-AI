@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { fetchJSON, toArray, type GraphNode, type GraphStats } from '@/lib/api';
@@ -12,6 +12,7 @@ import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import { t } from '@/lib/i18n';
+import { formatRelativeTime } from '@/lib/time';
 import { GitBranch, Search, Tag, FileText, RefreshCw, Sparkles, Loader2, Boxes, X, Trash2, Link2 } from 'lucide-react';
 
 type Tab = 'nodes' | 'tags' | 'recent' | 'semantic';
@@ -73,7 +74,8 @@ export default function GraphPage() {
       ]);
       setStats(s as GraphStats);
       setNodes(toArray<GraphNode>(n));
-      setTags(toArray<{ tag: string; count: number }>(tg));
+      setTags(toArray<{ name?: string; id?: unknown; metadata?: { count?: number } }>(tg)
+        .map(t => ({ tag: t.name ?? String(t.id ?? ''), count: t.metadata?.count ?? 0 })));
       setRecent(toArray<GraphNode>(r));
     } catch {
       addToast('Failed to load graph data', 'error');
@@ -125,7 +127,20 @@ export default function GraphPage() {
     setSemanticLoading(true);
     try {
       const data = await fetchJSON(`/v1/graph/hybrid?q=${encodeURIComponent(query)}&limit=8&expand=4`);
-      setSemanticResults(toArray(data));
+      const raw = toArray<Record<string, unknown>>(data);
+      setSemanticResults(raw.map(r => ({
+        node: {
+          id: String(r.id),
+          node_type: r.node_type as string,
+          title: r.title as string,
+          content: r.content as string | undefined,
+          tags: r.tags as string[] | undefined,
+          in_degree: Number(r.in_degree ?? 0),
+          out_degree: Number(r.out_degree ?? 0),
+        },
+        score: Number(r.similarity ?? 0),
+        neighbours: [...((r.linked as unknown[] | undefined) ?? []), ...((r.backlinked as unknown[] | undefined) ?? [])] as GraphNode[],
+      })));
     } catch {
       addToast('Semantic search failed', 'error');
     } finally {
@@ -178,7 +193,7 @@ export default function GraphPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard icon={<Boxes size={20} />} label="Nodes" value={String(nodeCount ?? nodes.length)} color="accent" />
-        <StatCard icon={<GitBranch size={20} />} label="Edges" value={String(edgeCount ?? '—')} color="success" />
+        <StatCard icon={<GitBranch size={20} />} label="Edges" value={String(edgeCount ?? 'â€”')} color="success" />
         <StatCard icon={<Tag size={20} />} label="Tags" value={String(tags.length)} color="warning" />
       </div>
 
@@ -229,10 +244,10 @@ export default function GraphPage() {
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       {typeof n.out_degree === 'number' && n.out_degree > 0 && (
-                        <span className="text-[10px] text-text-muted font-mono">→{n.out_degree}</span>
+                        <span className="text-[10px] text-text-muted font-mono">â†’{n.out_degree}</span>
                       )}
                       {typeof n.in_degree === 'number' && n.in_degree > 0 && (
-                        <span className="text-[10px] text-text-muted font-mono">←{n.in_degree}</span>
+                        <span className="text-[10px] text-text-muted font-mono">â†{n.in_degree}</span>
                       )}
                       <span className="text-xs text-text-muted font-mono">{n.id}</span>
                     </div>
@@ -250,10 +265,10 @@ export default function GraphPage() {
                     {previewNode.node_type && <Badge variant="brand">{previewNode.node_type}</Badge>}
                   </h3>
                   <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={() => deleteNode(previewNode.id)} className="text-text-muted hover:text-danger transition-colors p-1 rounded-md hover:bg-bg-tertiary" title="Delete node">
+                    <button onClick={() => deleteNode(previewNode.id)} className="text-text-muted hover:text-danger transition-colors p-1 rounded-lg hover:bg-bg-tertiary" title="Delete node">
                       <Trash2 size={15} />
                     </button>
-                    <button onClick={() => { setPreviewNode(null); setNodeLinks(null); }} className="text-text-muted hover:text-text-primary transition-colors p-1 rounded-md hover:bg-bg-tertiary" title="Close">
+                    <button onClick={() => { setPreviewNode(null); setNodeLinks(null); }} className="text-text-muted hover:text-text-primary transition-colors p-1 rounded-lg hover:bg-bg-tertiary" title="Close">
                       <X size={16} />
                     </button>
                   </div>
@@ -269,10 +284,10 @@ export default function GraphPage() {
                     <p className="text-sm text-text-secondary whitespace-pre-wrap max-h-48 overflow-y-auto scrollbar-thin">{String(previewNode.content || 'No content')}</p>
                     <div className="flex flex-wrap gap-1.5 mt-3">
                       {nodeLinks?.degrees && (
-                        <Badge variant="default">in {nodeLinks.degrees.in_degree ?? 0} · out {nodeLinks.degrees.out_degree ?? 0}</Badge>
+                        <Badge variant="default">in {nodeLinks.degrees.in_degree ?? 0} Â· out {nodeLinks.degrees.out_degree ?? 0}</Badge>
                       )}
                       {!!previewNode.workspace_id && <Badge variant="default">ws: {String(previewNode.workspace_id)}</Badge>}
-                      {!!previewNode.created_at && <Badge variant="default">{String(previewNode.created_at).slice(0, 10)}</Badge>}
+                      {!!previewNode.created_at && <Badge variant="default">{formatRelativeTime(previewNode.created_at as string | number)}</Badge>}
                     </div>
                     {(nodeLinks?.linked?.length || nodeLinks?.backlinked?.length) ? (
                       <div className="mt-3 space-y-3 border-t border-border pt-3">

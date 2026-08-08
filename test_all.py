@@ -449,6 +449,38 @@ with mock.patch.object(models_mod, "Llama", BoomLlama), \
     finally:
         CONFIG.openai.rate_limit_per_min, CONFIG.openai.backoff_max_s = old_rate
 
+section("Models (real Llama)")
+import models as real_models_mod
+from config import CONFIG as real_models_config
+
+_real_mm = real_models_mod.ModelManager()
+_real_avail = list(_real_mm.configs.keys())
+check("real models available", len(_real_avail) >= 1, f"({_real_avail})")
+
+_real_test_model = None
+for _candidate in ["hy-mt2", "gemma-4-e4b", "qwen2.5-omni-3b", "mythos-nano"]:
+    if _candidate in _real_avail:
+        _real_test_model = _candidate
+        break
+
+if _real_test_model:
+    _real_llm = _real_mm.load(_real_test_model)
+    check("real load returns instance", _real_llm is not None)
+    check("real load recorded", _real_test_model in real_models_mod.get_model_stats()["load_times"])
+    _real_text = _real_mm.generate(_real_test_model, "hi", max_tokens=8)
+    check("real generate returns text", bool(_real_text.strip()))
+    _real_tokens = _real_mm.count_tokens("hello world", _real_test_model)
+    check("real count_tokens works", _real_tokens > 0)
+    _real_chunks = list(_real_mm.generate_stream(_real_test_model, "hi", max_tokens=6))
+    check("real generate_stream chunks", len(_real_chunks) >= 1)
+    _real_stats = real_models_mod.get_model_stats(_real_mm)
+    check("real stats shape", "load_times" in _real_stats and "loaded_count" in _real_stats)
+    check("real stats loaded", _real_stats["loaded_count"] >= 1)
+    _real_mm.unload(_real_test_model)
+    check("real unload clears instance", _real_test_model not in _real_mm.instances)
+else:
+    check("real model candidate found", False, "no gguf models present")
+
 section("Database (mocked connection)")
 import database as db_mod
 CONFIG.db.enabled = False
@@ -1003,9 +1035,9 @@ fm = FakeModels()
 memm = MM2()
 orch = Orchestrator(fm, memm)
 
-check("resolve executor default", orch._resolve_executor(None) == "hy-mt2")
+check("resolve executor default", orch._resolve_executor(None) == "minicpm-v9")
 check("resolve executor override", orch._resolve_executor("minicpm-tooluse") == "minicpm-tooluse")
-check("resolve executor bad override", orch._resolve_executor("nope") == "hy-mt2")
+check("resolve executor bad override", orch._resolve_executor("nope") == "minicpm-v9")
 _task_sel, pe = orch.router.select_executors("hello", 2, None)
 check("parallel executors capped", len(pe) == 2 and pe[0] == "hy-mt2", f"({pe})")
 
@@ -1026,14 +1058,14 @@ orch.router.harness._data.clear()
 orch.router.harness.generation = 0
 res = orch.run("plan me", conv_id="t-plan", use_planning=True, parallel=False)
 check("run planning thinking", res["thinking"] == "PLAN")
-check("run planning response", res["response"] == "Answer from hy-mt2")
+check("run planning response", res["response"] == "Answer from minicpm-v9")
 
 res = orch.run("serial", conv_id="t-serial", use_planning=False, parallel=False)
-check("run serial no candidates", "parallel_candidates" not in res and res["response"] == "Answer from hy-mt2")
+check("run serial no candidates", "parallel_candidates" not in res and res["response"] == "Answer from minicpm-v9")
 
 sandbox_conv_before = len(memm.conversations)
 res = orch.run("sandbox me", conv_id="t-sandbox", use_planning=False, parallel=False, sandbox=True)
-check("run sandbox works", res["response"] == "Answer from hy-mt2")
+check("run sandbox works", res["response"] == "Answer from minicpm-v9")
 check("run sandbox no persistence", len(memm.conversations) == sandbox_conv_before)
 
 fm.fail = True
@@ -1314,6 +1346,50 @@ with mock.patch("hardware._vram_total_mb", return_value=6144), \
         for m, old_ctx in zip(CONFIG.models, hw_old[3]):
             m.n_ctx = old_ctx
         CONFIG.sync_threads()
+
+# HardwareMonitor tests
+import hardware as hw
+from unittest import mock
+
+class FakeMM:
+    def __init__(self):
+        self.instances = {}
+    def vram_used(self):
+        return 0
+
+with mock.patch("hardware.detect_hardware") as mock_detect:
+    mock_detect.return_value = {
+        "ram_available_mb": 8192,
+        "gpu_vram_mb": 6144,
+        "gpu_vram_used_mb": 3000,
+        "cpu_utilization": 10.0,
+        "cpu_cores": 4,
+    }
+    monitor = hw.HardwareMonitor(FakeMM(), check_interval=0.1)
+    monitor._enforce()
+    check("hw monitor no violation on healthy system", monitor._violations == 0)
+
+with mock.patch("hardware.detect_hardware") as mock_detect:
+    mock_detect.return_value = {
+        "ram_available_mb": 2048,
+        "gpu_vram_mb": 6144,
+        "gpu_vram_used_mb": 7000,
+        "cpu_utilization": 80.0,
+        "cpu_cores": 4,
+    }
+    mm = FakeMM()
+    monitor = hw.HardwareMonitor(mm, check_interval=0.1)
+    old_threads = CONFIG.threads
+    CONFIG.threads = 4
+    monitor._enforce()
+    check("hw monitor counts ram violation", monitor._violations > 0)
+    check("hw monitor counts vram violation", monitor._violations > 1)
+    check("hw monitor throttles cpu threads", CONFIG.threads < 4, f"({CONFIG.threads})")
+    CONFIG.threads = old_threads
+    CONFIG.sync_threads()
+
+check("hw monitor has start/stop", hasattr(hw.HardwareMonitor, "start") and hasattr(hw.HardwareMonitor, "stop"))
+check("hw live readings keys", all(k in hw.live_readings() for k in ["ram_total_mb", "gpu_vram_used_mb", "cpu_utilization"]))
 
 section("ARC harness")
 import arc
@@ -1998,23 +2074,36 @@ from fastapi.testclient import TestClient as TC2
 client = TC2(api_mod.app)
 r = client.get("/")
 check("GET / serves UI", r.status_code == 200 and ("Sovereign AI" in r.text or "Sovereign-Agentic-AI" in r.text))
-check("UI brand", 'Agentic' in r.text and 'Rhasan' in r.text)
-check("UI sidebar", 'sidebar' in r.text and 'Chat' in r.text and 'Workspace' in r.text)
-check("UI nav links", 'Chat' in r.text and 'Workspace' in r.text and 'Models' in r.text and 'Admin' in r.text)
-check("UI workspace select", 'workspace' in r.text.lower() or 'Workspace' in r.text)
-check("UI model select", 'model' in r.text.lower() and 'Dashboard' in r.text)
-check("UI hardware cards", 'VRAM' in r.text or 'Dashboard' in r.text)
-check("UI stop button", 'Stop' in r.text or 'Chat' in r.text)
-check("UI send button", 'Send' in r.text or 'Chat' in r.text)
-check("UI knowledge panel", 'Workspace' in r.text or 'Search' in r.text)
-check("UI tools panel", 'tools' in r.text.lower() or 'skill' in r.text.lower() or 'Workspace' in r.text)
-check("UI admin panel", 'Admin' in r.text or 'metrics' in r.text.lower())
-check("UI agent badge", 'agent' in r.text.lower() or 'Agent' in r.text)
-check("UI skill badge", 'skill' in r.text.lower() or 'Skill' in r.text or 'Workspace' in r.text)
-check("UI token badge", 'token' in r.text.lower() or 'Token' in r.text or 'Agentic' in r.text)
-check("UI pills", 'Plan' in r.text or 'Stream' in r.text or 'parallel' in r.text.lower() or 'Chat' in r.text)
-check("UI safe text escaping", 'Agentic' in r.text)
-check("UI stream support", '/v1/chat/stream' in r.text or '_next/static' in r.text)
+
+# Next.js static export puts interactive content in JS chunks; verify source files instead.
+page_sources = {
+    "app/page.tsx": open("frontend/app/page.tsx", encoding="utf-8").read(),
+    "app/chat/page.tsx": open("frontend/app/chat/page.tsx", encoding="utf-8").read(),
+    "app/sidebar/Sidebar.tsx": open("frontend/components/layout/Sidebar.tsx", encoding="utf-8").read(),
+    "app/dashboard/page.tsx": open("frontend/app/dashboard/page.tsx", encoding="utf-8").read(),
+    "app/admin/page.tsx": open("frontend/app/admin/page.tsx", encoding="utf-8").read(),
+    "app/tools/page.tsx": open("frontend/app/tools/page.tsx", encoding="utf-8").read(),
+    "app/models/page.tsx": open("frontend/app/models/page.tsx", encoding="utf-8").read(),
+    "app/graph/page.tsx": open("frontend/app/graph/page.tsx", encoding="utf-8").read(),
+}
+all_src = "\n".join(page_sources.values())
+check("UI brand", 'Agentic' in all_src and 'Rhasan' in all_src)
+check("UI sidebar", 'sidebar' in all_src and 'Chat' in all_src and 'Workspace' in all_src)
+check("UI nav links", 'Chat' in all_src and 'Workspace' in all_src and 'Models' in all_src and 'Admin' in all_src)
+check("UI workspace select", 'workspace' in all_src.lower() or 'Workspace' in all_src)
+check("UI model select", 'model' in all_src.lower() and 'Dashboard' in all_src)
+check("UI hardware cards", 'VRAM' in all_src or 'Dashboard' in all_src)
+check("UI stop button", 'Stop' in all_src or 'Chat' in all_src)
+check("UI send button", 'Send' in all_src or 'Chat' in all_src)
+check("UI knowledge panel", 'Workspace' in all_src or 'Search' in all_src)
+check("UI tools panel", 'tools' in all_src.lower() or 'skill' in all_src.lower() or 'Workspace' in all_src)
+check("UI admin panel", 'Admin' in all_src or 'metrics' in all_src.lower())
+check("UI agent badge", 'agent' in all_src.lower() or 'Agent' in all_src)
+check("UI skill badge", 'skill' in all_src.lower() or 'Skill' in all_src or 'Workspace' in all_src)
+check("UI token badge", 'token' in all_src.lower() or 'Token' in all_src or 'Agentic' in all_src)
+check("UI pills", 'Plan' in all_src or 'Stream' in all_src or 'parallel' in all_src.lower() or 'Chat' in all_src)
+check("UI safe text escaping", 'Agentic' in all_src)
+check("UI stream support", '/v1/chat/stream' in all_src or '_next/static' in r.text)
 etag = r.headers.get("etag")
 check("GET / etag", bool(etag) and etag.startswith('"') and etag.endswith('"'))
 if etag:
@@ -2133,7 +2222,7 @@ import cli as cli_mod
 
 cmds = ["/models", "/plan on", "/plan off", "/think", "/think on", "/parallel on", "/parallel off",
         "/db off", "/model minicpm-tooluse", "/model", "/model bogus", "/openai", "/openai sk-test",
-        "/code on", "/harness", "/cloud groq", "/arc", "/prune", "/agent coder", "/agent bogus",
+        "/code on", "/harness", "/cloud groq", "/arc", "/prune", "/agent agent_x", "/agent bogus",
         "/agent add cli-test-agent \"CLI test agent\" \"You are a CLI test agent\"",
         "/agent delete cli-test-agent",
         "/agents", "/skills", "/nope", "/clear", "/exit"]
@@ -2155,9 +2244,9 @@ try:
     check("cli /cloud groq", "Cloud preset: groq" in out and CONFIG.cloud_provider == "groq")
     check("cli /arc", "ARC: dataset not found" in out)
     check("cli /prune", "Pruned 0 old memories" in out, f"[{next((l.strip() for l in out.splitlines() if 'Pruned' in l), '?')}]")
-    check("cli /agent switch", "Agent: coder (Coding Agent)" in out)
+    check("cli /agent switch", "Agent: agent_x (Agent X (All-in-One))" in out)
     check("cli /agent bogus", "Unknown agent 'bogus'" in out)
-    check("cli /agents", "translator" in out and "/agent <name>" in out)
+    check("cli /agents", "agent_x" in out and "/agent <name>" in out)
     check("cli /skills", "summarize" in out and "/skill <name>" in out)
     check("cli /nope unknown", "Unknown: /nope" in out)
     check("cli /clear + /exit", "Cleared." in out and "Goodbye!" in out)
@@ -2198,7 +2287,7 @@ try:
     check("cli /save + /load", "Session saved: my-session" in out and "Session loaded: my-session" in out)
     check("cli /sessions", "my-session" in out)
     check("cli /exec", "hi" in out)
-    check("cli HUD", "model:hy-mt2" in out and "tok:0" in out)
+    check("cli HUD", "model:gemma-4-e4b" in out and "tok:0" in out)
     check("cli has streaming helpers", hasattr(cli_ext, "_ask_stream") and hasattr(cli_ext, "_ask_parallel"))
 finally:
     shutil.rmtree(_cli_tmp, ignore_errors=True)
@@ -2263,6 +2352,21 @@ try:
     check("whitelist blocks /model too", _rc is None and "Blocked: '/model'" in buf.getvalue())
 finally:
     CONFIG.cli_command_whitelist = _wl_saved
+
+section("CLI help & tab completion")
+
+# Help text has expected sections
+check("cli help has quick start", "QUICK START" in cli_ext.HELP_TEXT)
+check("cli help has examples", "EXAMPLES" in cli_ext.HELP_TEXT)
+check("cli help has shortcuts", "SHORTCUTS" in cli_ext.HELP_TEXT)
+check("cli help has tab hint", "Tab" in cli_ext.HELP_TEXT)
+
+# Visible commands respects whitelist
+check("visible commands default full", set(cli_ext._visible_commands()) == set(cli_ext._COMMANDS))
+check("visible commands has slash", all(c.startswith("/") for c in cli_ext._visible_commands()))
+
+# Readline completer exists
+check("cli has readline completer", hasattr(cli_ext, "_readline_completer"))
 
 section("CLI streaming + multi-line input")
 
@@ -2471,12 +2575,12 @@ check("kg extract headings", _extract_headings("## H1\n### H2") == ["H1", "H2"])
 section("Agents & skills (agents.py)")
 import agents
 
-check("agents default exists", agents.get_agent(None)["name"] == "general")
-check("agents list non-empty", len(agents.list_agents()) >= 6, f"({agents.list_agents()})")
+check("agents default exists", agents.get_agent(None)["name"] == "agent_x")
+check("agents list non-empty", len(agents.list_agents()) >= 2, f"({agents.list_agents()})")
 check("agents get unknown", agents.get_agent("nope") is None)
-check("agents coder role", agents.get_agent("coder")["role"] == "Coding Agent")
-check("agents system prompt", "software engineering" in agents.agent_system_prompt("coder"))
-check("agents default prompt", "helpful" in agents.agent_system_prompt("nope"))
+check("agents agent_x role", agents.get_agent("agent_x")["role"] == "Agent X (All-in-One)")
+check("agents system prompt", "universal" in agents.agent_system_prompt("agent_x"))
+check("agents default prompt", "universal" in agents.agent_system_prompt("nope"))
 check("skills list non-empty", len(agents.list_skills()) >= 6, f"({agents.list_skills()})")
 check("skills get unknown", agents.get_skill("nope") is None)
 r = agents.render_skill("summarize", "long text here")
@@ -2487,6 +2591,86 @@ check("skill render unknown", agents.render_skill("nope", "x") is None)
 check("skill render missing input", agents.render_skill("summarize", "") is not None)
 check("agents all have prompts", all("system_prompt" in agents.get_agent(n) for n in agents.list_agents()))
 check("skills all have templates", all("template" in agents.get_skill(n) for n in agents.list_skills()))
+
+section("GBNF parser & auto-approved workflow")
+from action_models import Action, ActionType, AgentContext, TraceEvent
+from gbnf_parser import parse_actions, GbnfParseError
+
+# Parser unit tests
+sample_think = "[THINK]: I need to inspect the project first"
+sample_bash = "[BASH]: ls -la"
+sample_read = "[READ]: README.md"
+sample_write = "[WRITE]: output.txt\nHello world content"
+sample_done = "[DONE]: Task completed successfully"
+sample_multi = "[THINK]: plan\n[BASH]: dir\n[READ]: file.txt\n[DONE]: done"
+
+parsed_think = parse_actions(sample_think)
+check("gbnf parse THINK", len(parsed_think) == 1 and parsed_think[0].type == ActionType.THINK, f"({len(parsed_think)})")
+check("gbnf parse THINK content", parsed_think[0].content == "I need to inspect the project first")
+
+parsed_bash = parse_actions(sample_bash)
+check("gbnf parse BASH", len(parsed_bash) == 1 and parsed_bash[0].type == ActionType.BASH)
+
+parsed_read = parse_actions(sample_read)
+check("gbnf parse READ", len(parsed_read) == 1 and parsed_read[0].type == ActionType.READ and parsed_read[0].path == "README.md")
+
+parsed_write = parse_actions(sample_write)
+check("gbnf parse WRITE", len(parsed_write) == 1 and parsed_write[0].type == ActionType.WRITE and parsed_write[0].path == "output.txt", f"({parsed_write[0].path})")
+check("gbnf parse WRITE content", "Hello world content" in parsed_write[0].content)
+
+parsed_done = parse_actions(sample_done)
+check("gbnf parse DONE", len(parsed_done) == 1 and parsed_done[0].type == ActionType.DONE)
+
+parsed_multi = parse_actions(sample_multi)
+check("gbnf parse multi-action", len(parsed_multi) == 4, f"({len(parsed_multi)})")
+check("gbnf parse multi types", [a.type for a in parsed_multi] == [ActionType.THINK, ActionType.BASH, ActionType.READ, ActionType.DONE])
+
+try:
+    parse_actions("no valid action here")
+    check("gbnf parse raises on invalid", False)
+except GbnfParseError:
+    check("gbnf parse raises on invalid", True)
+
+try:
+    parse_actions("")
+    check("gbnf parse raises on empty", False)
+except GbnfParseError:
+    check("gbnf parse raises on empty", True)
+
+# TraceEvent dataclass
+tev = TraceEvent(type="trace", action="BASH", content="ls", step=1)
+check("TraceEvent fields", tev.type == "trace" and tev.action == "BASH" and tev.step == 1)
+
+# AgentContext
+ctx = AgentContext(goal="test goal", conv_id="c1", workspace_id="default")
+check("AgentContext default values", ctx.max_steps == 25 and ctx.done is False and ctx.result == "")
+ctx.record(Action(type=ActionType.BASH, content="ls", success=True))
+check("AgentContext record", len(ctx.actions) == 1 and "ls" in ctx.scratchpad)
+
+# Workflow method exists and is callable
+import orchestrator as orch_mod
+check("orchestrator has workflow method", hasattr(orch_mod.Orchestrator, "run_auto_approved_workflow"))
+
+# Router agent_workflow wiring
+from router import agent_workflow
+check("router agent_workflow returns auto_approved", agent_workflow("agent_x") == "auto_approved")
+check("router agent_workflow returns None for unknown", agent_workflow("nope") is None)
+
+# API has workflow endpoint
+import api as api_mod
+route_paths = [getattr(rt, "path", "") for rt in api_mod.app.routes]
+check("api route workflow", "/v1/chat/auto-stream/workflow" in route_paths)
+check("api route agent auto", "/v1/agent/auto" in route_paths)
+check("api route installed models", "/v1/models/installed" in route_paths)
+check("api route pull model", "/v1/models/pull" in route_paths)
+
+# Installed models endpoint
+client = TestClient(api_mod.app)
+r = client.get("/v1/models/installed")
+check("GET /v1/models/installed status", r.status_code == 200, f"({r.status_code})")
+inst_data = r.json()
+check("installed models has models_dir", "models_dir" in inst_data)
+check("installed models has models list", "models" in inst_data and isinstance(inst_data.get("models"), list))
 
 section("API route coverage")
 import api as api_mod

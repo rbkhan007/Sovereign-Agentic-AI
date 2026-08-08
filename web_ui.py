@@ -373,7 +373,8 @@ def create_web_app(api_app: FastAPI) -> FastAPI:
         '<stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#6366f1"/>'
         '</linearGradient></defs>'
         '<rect x="2" y="2" width="60" height="60" rx="14" fill="url(#g)"/>'
-        '<path d="M32 14c2.5 6 5.5 9 10 9.5-4.5.5-7.5 3.5-10 9.5 0-9.5-6-10-10-9.5 4.5-.5 7.5-3.5 10-9.5z" fill="#0b1020"/>'
+         '<path d="M32 14c2.5 6 5.5 9 10 9.5-4.5.5-7.5 3.5-10 9.5 '
+         '0-9.5-6-10-10-9.5 4.5-.5 7.5-3.5 10-9.5z" fill="#0b1020"/>'
         '<circle cx="32" cy="39" r="7" fill="#0b1020"/></svg>'
     )
 

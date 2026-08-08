@@ -9,6 +9,8 @@ export function getApiBase(): string {
   return process.env.NEXT_PUBLIC_API_BASE || '';
 }
 
+import { loadAuth } from '@/lib/auth';
+
 export async function api(path: string, options: RequestInit = {}, timeout = 60000, signal?: AbortSignal): Promise<Response> {
   const base = getApiBase();
   const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
@@ -19,8 +21,9 @@ export async function api(path: string, options: RequestInit = {}, timeout = 600
   let token = '';
   let adminKey = '';
   if (typeof window !== 'undefined') {
-    token = (window as unknown as Record<string, string | undefined>).API_TOKEN || '';
-    adminKey = (window as unknown as Record<string, string | undefined>).ADMIN_KEY || '';
+    const auth = loadAuth();
+    token = auth.apiToken || (window as unknown as Record<string, string | undefined>).API_TOKEN || '';
+    adminKey = auth.adminKey || (window as unknown as Record<string, string | undefined>).ADMIN_KEY || '';
   }
   
   if (signal) {
@@ -72,7 +75,7 @@ export function toArray<T>(v: unknown): T[] {
   if (Array.isArray(v)) return v as T[];
   if (v && typeof v === 'object') {
     const obj = v as Record<string, unknown>;
-    for (const key of ['data', 'nodes', 'results', 'conversations', 'agents', 'skills', 'logs', 'datasets', 'models', 'messages', 'tags']) {
+    for (const key of ['data', 'nodes', 'results', 'conversations', 'agents', 'skills', 'logs', 'datasets', 'models', 'messages', 'tags', 'workspaces', 'files', 'memories', 'edges']) {
       if (key in obj && Array.isArray((obj as Record<string, unknown>)[key])) {
         return (obj as Record<string, T[]>)[key];
       }
@@ -85,13 +88,22 @@ export interface ModelItem {
   id: string;
   role?: string;
   loaded?: boolean;
+  capabilities?: string[];
   [key: string]: unknown;
+}
+
+export interface InstalledModel {
+  filename: string;
+  path: string;
+  size_mb: number;
+  size_bytes: number;
 }
 
 export interface ChatMessage {
   id?: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  model?: string;
 }
 
 /** Return the message with a stable id attached (memoized-safe, no-op if present). */
@@ -175,7 +187,7 @@ export async function autoStreamChat(
 }
 
 export interface ComputerToolEvent {
-  type: 'thinking' | 'tool_call' | 'complete' | 'error' | 'done';
+  type: 'thinking' | 'tool_call' | 'action' | 'complete' | 'error' | 'done';
   content?: string;
   tool?: string;
   args?: Record<string, unknown>;
@@ -184,11 +196,27 @@ export interface ComputerToolEvent {
   step?: number;
   elapsed?: number;
   answer?: string;
+  action?: string;
+  payload?: string;
+  protocol?: string;
+}
+
+export interface WorkflowEvent {
+  type: 'plan' | 'trace' | 'complete' | 'error' | 'status';
+  content?: string;
+  action?: string;
+  path?: string;
+  result?: string;
+  success?: boolean;
+  error?: string;
+  step?: number;
+  elapsed_s?: number;
+  message?: string;
 }
 
 export async function computerStream(
   goal: string,
-  opts: { sandbox?: boolean; maxSteps?: number },
+  opts: { sandbox?: boolean; maxSteps?: number; protocol?: 'json' | 'actions' },
   onEvent?: (event: ComputerToolEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -198,6 +226,7 @@ export async function computerStream(
       goal,
       sandbox: opts.sandbox ?? false,
       max_steps: opts.maxSteps ?? 25,
+      protocol: opts.protocol ?? 'json',
     }),
   }, 600000, signal);
 
@@ -208,6 +237,36 @@ export async function computerStream(
   for await (const evt of readSSE<ComputerToolEvent>(res)) {
     if (evt.type === 'error') {
       throw new Error(evt.content || 'Computer agent error');
+    }
+    if (onEvent) onEvent(evt);
+  }
+}
+
+export async function workflowStream(
+  goal: string,
+  opts: { workspace?: string; maxSteps?: number; model?: string },
+  onEvent?: (event: WorkflowEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await api('/v1/chat/auto-stream/workflow', {
+    method: 'POST',
+    body: JSON.stringify({
+      messages: [{ role: 'user', content: goal }],
+      model: opts.model || '',
+      workspace_id: opts.workspace || 'default',
+      max_tokens: opts.maxSteps ?? 25,
+      stream: true,
+    }),
+  }, 600000, signal);
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Workflow stream failed: ${res.status}${text ? ' - ' + text.slice(0, 200) : ''}`);
+  }
+
+  for await (const evt of readSSE<WorkflowEvent>(res)) {
+    if (evt.type === 'error') {
+      throw new Error(evt.content || evt.message || 'Workflow error');
     }
     if (onEvent) onEvent(evt);
   }
@@ -279,8 +338,9 @@ export async function uploadChatFile(file: File): Promise<{ url: string; name: s
   let token = '';
   let adminKey = '';
   if (typeof window !== 'undefined') {
-    token = (window as unknown as Record<string, string | undefined>).API_TOKEN || '';
-    adminKey = (window as unknown as Record<string, string | undefined>).ADMIN_KEY || '';
+    const auth = loadAuth();
+    token = auth.apiToken || (window as unknown as Record<string, string | undefined>).API_TOKEN || '';
+    adminKey = auth.adminKey || (window as unknown as Record<string, string | undefined>).ADMIN_KEY || '';
   }
   const res = await fetch(`${getApiBase()}/v1/chat/upload`, {
     method: 'POST',
@@ -295,4 +355,24 @@ export async function uploadChatFile(file: File): Promise<{ url: string; name: s
     throw new Error(`Upload failed: ${res.status} - ${text}`);
   }
   return res.json() as Promise<{ url: string; name: string }>;
+}
+
+export async function fetchInstalledModels(): Promise<InstalledModel[]> {
+  const res = await api('/v1/models/installed');
+  if (!res.ok) throw new Error('Failed to fetch installed models');
+  const data = await res.json() as { models?: InstalledModel[] };
+  return data.models || [];
+}
+
+export async function pullModel(url: string, filename?: string): Promise<ReadableStream<Uint8Array>> {
+  const res = await api('/v1/models/pull', {
+    method: 'POST',
+    body: JSON.stringify({ url, filename: filename || '' }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Pull failed: ${res.status}${text ? ' - ' + text.slice(0, 200) : ''}`);
+  }
+  if (!res.body) throw new Error('No response body');
+  return res.body;
 }
