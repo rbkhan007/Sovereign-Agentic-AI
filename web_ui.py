@@ -418,6 +418,7 @@ def create_web_app(api_app: FastAPI) -> FastAPI:
 
     @api_app.get("/chat", include_in_schema=False)
     @api_app.get("/", include_in_schema=False)
+    @api_app.get("/login", include_in_schema=False)
     @api_app.get("/workspace", include_in_schema=False)
     @api_app.get("/database", include_in_schema=False)
     @api_app.get("/models", include_in_schema=False)
