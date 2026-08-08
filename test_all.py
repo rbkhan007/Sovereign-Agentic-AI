@@ -2302,7 +2302,7 @@ with redirect_stdout(io.StringIO()) as buf:
         {"type": "response", "content": "lo"},
     ]), _st, {})
 _out = buf.getvalue()
-check("cli stream start model in footer", "hy-mt2" in _out and "[hy-mt2 |" in _out, f"[{_out.splitlines()[-1]!r}]")
+check("cli stream start model in footer", "hy-mt2" in _out and "·" in _out, f"[{_out.splitlines()[-1]!r}]")
 check("cli stream assembles chunks", "Hello" in _out)
 check("cli stream counts tokens", _st["tokens"] == 1, f"({_st['tokens']})")
 

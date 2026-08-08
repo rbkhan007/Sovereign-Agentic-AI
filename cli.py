@@ -86,6 +86,128 @@ def _bold(text):
     return _paint(text, "1")
 
 
+def _italic(text):
+    return _paint(text, "3")
+
+
+def _underline(text):
+    return _paint(text, "4")
+
+
+def _strikethrough(text):
+    return _paint(text, "9")
+
+
+def _inverse(text):
+    return _paint(text, "7")
+
+
+# Modern color palette (Gemini CLI / CodeCLI inspired)
+def _muted(text):
+    return _paint(text, "90")
+
+
+def _subtle(text):
+    return _paint(text, "37")
+
+
+def _accent(text):
+    return _paint(text, "36")
+
+
+def _user_color(text):
+    return _paint(text, "94")
+
+
+def _assistant_color(text):
+    return _paint(text, "32")
+
+
+def _thinking_color(text):
+    return _paint(text, "35")
+
+
+def _tool_color(text):
+    return _paint(text, "33")
+
+
+def _error_color(text):
+    return _paint(text, "31")
+
+
+def _success_color(text):
+    return _paint(text, "32")
+
+
+def _warning_color(text):
+    return _paint(text, "33")
+
+
+def _info_color(text):
+    return _paint(text, "36")
+
+
+def _border(text):
+    return _paint(text, "90")
+
+
+def _border_light(text):
+    return _paint(text, "37")
+
+
+def _bg_dim(text):
+    return _paint(text, "100")
+
+
+# Box-drawing helpers for modern rounded corners
+def _round_corner(text):
+    return _g(text, "+")
+
+
+def _round_h(text):
+    return _g("\u2500", "-")
+
+
+def _round_v(text):
+    return _g("\u2502", "|")
+
+
+def _corner_tl(text):
+    return _g("\u256d", "+")
+
+
+def _corner_tr(text):
+    return _g("\u256e", "+")
+
+
+def _corner_bl(text):
+    return _g("\u2570", "\\")
+
+
+def _corner_br(text):
+    return _g("\u256f", "+")
+
+
+def _tee_left(text):
+    return _g("\u251c", "+")
+
+
+def _tee_right(text):
+    return _g("\u2524", "+")
+
+
+def _tee_top(text):
+    return _g("\u252c", "+")
+
+
+def _tee_bottom(text):
+    return _g("\u2534", "+")
+
+
+def _cross(text):
+    return _g("\u253c", "+")
+
+
 def _g(s: str, fallback: str) -> str:
     """Return s if stdout's encoding can represent it, else fallback."""
     try:
@@ -104,24 +226,25 @@ def _box_rule(char: str) -> str:
     return "  " + _g(char, "+") + _g("\u2550", "=") * 62 + _g(char, "+")
 
 
-WELCOME = _cyan("\n".join([
-    _box_rule("\u2554"),
-    _box_line("RHASAN INDIE'S AGENTIC LLM  -  TERMINAL"),
-    _box_line(""),
-    _box_line(f"GPU: {'Enabled (' + CONFIG.gpu_name + ')' if HAS_GPU else 'Disabled'}"),
-    _box_line(f"Threads: {CONFIG.threads}   Models: {len(CONFIG.available_models)}   Database: {'ON' if CONFIG.db.enabled else 'off'}"),
-    _box_line(f"Cloud: {CONFIG.cloud_provider or 'none'}   Type /help for all commands"),
-    _box_rule("\u255a"),
+WELCOME = _accent("\n".join([
+    _g("\u256d", "+") + _g("\u2500", "-") * 64 + _g("\u256e", "+"),
+    _g("\u2502", "|") + " " + _bold("Sovereign-Agentic-AI") + " " * 46 + _g("\u2502", "|"),
+    _g("\u2502", "|") + " " + _dim("Local Multi-Agent LLM · Terminal") + " " * 32 + _g("\u2502", "|"),
+    _g("\u251c", "+") + _g("\u2500", "-") * 64 + _g("\u2524", "+"),
+    _g("\u2502", "|") + f" GPU: {'Enabled (' + CONFIG.gpu_name + ')' if HAS_GPU else 'Disabled'}",
+    _g("\u2502", "|") + f" Threads: {CONFIG.threads}   Models: {len(CONFIG.available_models)}   DB: {'ON' if CONFIG.db.enabled else 'off'}",
+    _g("\u2502", "|") + f" Cloud: {CONFIG.cloud_provider or 'none'}",
+    _g("\u2570", "\\") + _g("\u2500", "-") * 64 + _g("\u256f", "+"),
     "",
-    _g("  Try: ", "") + _cyan("'explain quantum computing'") + _g("   |   ", "") +
-    _cyan("'/code fix this'") + _g("   |   ", "") + _cyan("'/parallel on'") + _g("   |   ", "") +
-    _cyan("'/arc 5'"),
-    _dim("  Planning is ON: complex questions route through the strategist. "
-         "Toggle with /plan, ensemble with /parallel."),
+    _g("  ", "") + _accent("Try:") + _g("  'explain quantum computing'", "") + _g("  |  ", "") +
+    _g("'/code fix this'", "") + _g("  |  ", "") + _g("'/parallel on'", "") + _g("  |  ", "") +
+    _g("'/arc 5'", ""),
+    _dim("  Planning is ON · Toggle with /plan · Ensemble with /parallel"),
+    "",
 ]))
 
 HELP_TEXT = f"""
-{_cyan('  QUICK START')}
+{_bold(_accent('  QUICK START'))}
   Ask anything:       explain quantum computing
   Use an agent:       /agent agent_x
   Switch model:       /model qwen2.5-omni-3b
@@ -129,7 +252,7 @@ HELP_TEXT = f"""
   Shell command:      !dir
   Help:               /help
 
-{_cyan('  SYSTEM')}
+{_bold(_accent('  SYSTEM'))}
   /help                show this help
   /status              live status (HUD, VRAM, models, config)
   /debug on|off        toggle debug logging
@@ -138,14 +261,14 @@ HELP_TEXT = f"""
   /clear               clear this conversation
   /exit                quit
 
-{_cyan('  MODELS')}
+{_bold(_accent('  MODELS'))}
   /model <name>        switch executor model
   /models              list all models (local + cloud)
   /preload <name>      load a model into VRAM now
   /unload [name]       unload model(s) from VRAM
   /vram                VRAM usage per loaded model
 
-{_cyan('  PLANNING & REASONING')}
+{_bold(_accent('  PLANNING & REASONING'))}
   /plan on|off         toggle planning/reasoning (strategist)
   /think on|off        toggle live reasoning output
   /harness             show adaptive model-selection scores
@@ -154,7 +277,7 @@ HELP_TEXT = f"""
   /harness export|import persist/restore harness state
   /arc [n]             run ARC reasoning eval (needs arc/training.json)
 
-{_cyan('  AGENTS & SKILLS')}
+{_bold(_accent('  AGENTS & SKILLS'))}
   /agent <name>        switch agent persona (see /agents)
   /agents              list agent personas (agent_x, general, custom...)
   /skills              list skills (summarize, translate, code-review, ...)
@@ -165,7 +288,7 @@ HELP_TEXT = f"""
   /computer sandbox on|off  toggle sandbox mode (read-only)
   /lora <sub>          list|enable|disable|import|train|delete
 
-{_cyan('  GENERATION')}
+{_bold(_accent('  GENERATION'))}
   /parallel on|off     ensemble mode: N models answer, a judge picks best
   /context show|set|clear  inspect / set system prompt, show recent context
   /temperature <0-2>   override sampling temperature
@@ -173,25 +296,25 @@ HELP_TEXT = f"""
   /timeout <seconds>   change generation watchdog timeout
   /tokens              token usage this session
 
-{_cyan('  CONVERSATIONS')}
+{_bold(_accent('  CONVERSATIONS'))}
   /save [name]         persist this conversation to disk
   /load <name>         restore a saved conversation
   /sessions            list saved conversations
 
-{_cyan('  CLOUD & MEMORY')}
+{_bold(_accent('  CLOUD & MEMORY'))}
   /openai <key>        set OpenAI-compatible API key
   /cloud <name>        cloud preset: {', '.join(CLOUD_PRESETS)} (key via /openai)
   /db on|off|stats|clear|search|tables|index
-                       toggle PostgreSQL, show stats, clear, search, list tables/indexes
+                        toggle PostgreSQL, show stats, clear, search, list tables/indexes
   /prune               delete memories older than {CONFIG.prune_max_age_days} days
   /exec <cmd>          run a shell command   (or prefix with !)
 
-{_cyan('  MCP TOOLS')}
+{_bold(_accent('  MCP TOOLS'))}
   /mcp                 list all MCP tools (chat, agents, skills)
   /mcp call <tool> <input>  call an MCP tool from the terminal
   /mcp json            output tool list as JSON
 
-{_cyan('  EXAMPLES')}
+{_bold(_accent('  EXAMPLES'))}
   /agent agent_x
   /model qwen2.5-omni-3b
   /computer find all .py files and count lines
@@ -200,7 +323,7 @@ HELP_TEXT = f"""
   /mcp call chat What is machine learning?
   /harness adjust code hy-mt2 85.0
 
-{_cyan('  SHORTCUTS')}
+{_bold(_accent('  SHORTCUTS'))}
   !!                   re-run last prompt (same as /retry)
   !<command>           run shell command
   Enter to send, \\ at line end for multi-line, Ctrl+C to stop output
@@ -254,7 +377,7 @@ def _visible_commands() -> list[str]:
 
 
 def _prompt() -> str:
-    return _cyan(_g("\u276f ", "> "))
+    return _accent(_g("\u25b8 ", "> "))
 
 
 def _split_args(line) -> list[str]:
@@ -325,33 +448,36 @@ def _run_shell(cmd: str):
         out = proc.stdout or ""
         if proc.returncode != 0:
             out += (proc.stderr or "")
-        print((out or "").rstrip() or _dim(f"[exit {proc.returncode}]"))
+        if out.strip():
+            print(out.rstrip())
+        else:
+            print(_dim(f"[exit {proc.returncode}]"))
     except subprocess.TimeoutExpired:
-        print(_red("[Error] command timed out"))
+        print(_error_color("[Error] command timed out"))
     except Exception as e:
-        print(_red(f"[Error] {e}"))
+        print(_error_color(f"[Error] {e}"))
 
 
 def _hud(st: dict, mm: ModelManager) -> str:
     cloud = CONFIG.cloud_provider or ("openai" if CONFIG.openai.enabled else "none")
     parts = [
-        _cyan(f"agent:{st.get('agent', '?')}"),
-        _green(f"model:{st.get('last_model', '?')}"),
-        "plan:" + (_green("ON") if st.get("planning") else "off"),
-        "par:" + (_green("ON") if st.get("parallel") else "off"),
-        "code:" + (_green("ON") if st.get("coding") else "off"),
-        f"cloud:{cloud}",
-        f"tok:{st.get('tokens', 0)}",
+        _accent(f"agent:{st.get('agent', '?')}"),
+        _success_color(f"model:{st.get('last_model', '?')}"),
+        _success_color("plan:ON") if st.get("planning") else _muted("plan:off"),
+        _success_color("par:ON") if st.get("parallel") else _muted("par:off"),
+        _success_color("code:ON") if st.get("coding") else _muted("code:off"),
+        _info_color(f"cloud:{cloud}"),
+        _muted(f"tok:{st.get('tokens', 0)}"),
     ]
     temperature = st.get("temperature")
     if temperature is not None:
-        parts.append(f"temp:{temperature}")
+        parts.append(_muted(f"temp:{temperature}"))
     max_tokens = st.get("max_tokens")
     if max_tokens:
-        parts.append(f"max:{max_tokens}")
+        parts.append(_muted(f"max:{max_tokens}"))
     if mm.instances:
-        parts.append(f"loaded:{len(mm.instances)}")
-    return "  " + _dim(" | ").join(parts)
+        parts.append(_success_color(f"loaded:{len(mm.instances)}"))
+    return "  " + _dim(" · ").join(parts)
 
 
 # ---------- TUI: chat-style interface with fixed input + scrollable message area ----------
@@ -392,6 +518,10 @@ class Message:
             return "You"
         if self.role == "assistant":
             return "Assistant"
+        if self.role == "thinking":
+            return "Thinking"
+        if self.role == "tool":
+            return "Tool"
         return self.role.capitalize()
 
 
@@ -399,7 +529,38 @@ def _strip_ansi(s: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", s)
 
 
+# Modern Unicode icons (Gemini CLI / CodeCLI inspired)
+_ICONS = {
+    "user": "👤",
+    "assistant": "🤖",
+    "system": "⚙️ ",
+    "thinking": "💭",
+    "tool": "🔧",
+    "error": "❌",
+    "success": "✅",
+    "warning": "⚠️ ",
+    "info": "ℹ️ ",
+    "model": "🧠",
+    "tokens": "📊",
+    "time": "⏱",
+    "arrow": "▸",
+    "bullet": "•",
+    "dot": "·",
+    "dash": "─",
+    "pipe": "│",
+    "cross": "┼",
+    "tee": "├",
+    "corner_tl": "╭",
+    "corner_tr": "╮",
+    "corner_bl": "╰",
+    "corner_br": "╯",
+    "h_line": "─",
+    "v_line": "│",
+}
+
+
 class TUIRenderer:
+    """Modern chat-style TUI inspired by Gemini CLI and OpenCode CodeCLI."""
     HEADER_H = 2
     INPUT_H = 3
     MIN_MSG_H = 5
@@ -446,106 +607,142 @@ class TUIRenderer:
             out.append(line)
         return out or [""]
 
-    def _render_message_cell(self, msg: Message, y: int, width: int) -> int:
+    def _render_message_bubble(self, msg: Message, y: int, width: int) -> int:
+        """Render a modern message bubble with rounded corners."""
         pad = 1
-        inner = width - (pad * 2) - 2
-        color = msg.role_color()
-        avatar = _g(msg.avatar(), "*")
-        label = msg.role_label()
+        inner_width = width - (pad * 2) - 2
+        inner_width = max(10, inner_width)
+
+        # Role-based styling
+        if msg.role == "user":
+            role_color = _user_color
+            icon = _ICONS["user"]
+            label = _bold(_user_color("You"))
+            bubble_style = _border
+        elif msg.role == "assistant":
+            role_color = _assistant_color
+            icon = _ICONS["assistant"]
+            label = _bold(_assistant_color("Assistant"))
+            bubble_style = _border_light
+        elif msg.role == "thinking":
+            role_color = _thinking_color
+            icon = _ICONS["thinking"]
+            label = _italic(_thinking_color("Thinking"))
+            bubble_style = _border
+        elif msg.role == "tool":
+            role_color = _tool_color
+            icon = _ICONS["tool"]
+            label = _bold(_tool_color("Tool"))
+            bubble_style = _border
+        else:
+            role_color = _muted
+            icon = _ICONS.get(msg.role, "📌")
+            label = _bold(_muted(msg.role.capitalize()))
+            bubble_style = _border
+
+        # Meta information
         meta_parts = []
         if msg.model:
-            meta_parts.append(f"model={msg.model}")
-        if msg.elapsed:
-            meta_parts.append(f"{msg.elapsed:.1f}s")
+            meta_parts.append(f"{_ICONS['model']} {msg.model}")
         if msg.tokens:
-            meta_parts.append(f"{msg.tokens} tok")
-        meta = " \u00b7 ".join(meta_parts)
-        header = f"{_g(avatar, '*')} {_bold(label)}"
+            meta_parts.append(f"{_ICONS['tokens']} {msg.tokens}")
+        if msg.elapsed:
+            meta_parts.append(f"{_ICONS['time']} {msg.elapsed:.1f}s")
+        meta = _muted("  ".join(meta_parts)) if meta_parts else ""
+
+        # Content lines
+        lines = self._wrap(msg.content, inner_width)
+        bubble_h = 3 + len(lines)  # header + separator + content + bottom
+
+        # Top border with rounded corners
+        sys.stdout.write(f"\033[{y};1H")
+        top_border = _paint(" " * pad, "") + bubble_style(_corner_tl("╭") + _round_h("─") * (inner_width + 2) + _corner_tr("╮"))
+        sys.stdout.write(top_border + "\n")
+        y += 1
+
+        # Header line
+        sys.stdout.write(f"\033[{y};1H")
+        header = bubble_style(_round_v("│")) + " " + icon + " " + label
         if meta:
-            header += f"  {_dim(meta)}"
-
-        lines = self._wrap(msg.content, inner)
-        total = 3 + len(lines)  # header + pad + bottom rule
-
-        # top border
-        sys.stdout.write(f"\033[{y};1H")
-        sys.stdout.write(_paint(" " * pad + _g("\u256d", "+") + _g("\u2500", "-") * (inner + 2) + _g("\u256e", "+"), color))
+            header += "  " + meta
+        padding = " " * (inner_width + 2 - _strip_ansi_len(header) + 1)
+        sys.stdout.write(header + padding + bubble_style(_round_v("│")) + "\n")
         y += 1
 
-        # header line
+        # Separator
         sys.stdout.write(f"\033[{y};1H")
-        sys.stdout.write(_paint(_g("\u2502", "|") + " ", color) + header + _paint(" " + _g("\u2502", "|"), color))
+        sep = bubble_style(_tee_left("├") + _round_h("─") * (inner_width + 2) + _tee_right("┤"))
+        sys.stdout.write(sep + "\n")
         y += 1
 
-        # separator
-        sys.stdout.write(f"\033[{y};1H")
-        sys.stdout.write(_paint(_g("\u2502", "|") + " " + _g("\u2500", "-") * inner + " " + _g("\u2502", "|"), color))
-        y += 1
-
-        # content lines
+        # Content lines
         for line in lines:
             sys.stdout.write(f"\033[{y};1H")
-            sys.stdout.write(_paint(_g("\u2502", "|") + " ", color) + f"{line:<{inner}}" + _paint(" " + _g("\u2502", "|"), color))
+            content_str = bubble_style(_round_v("│")) + " " + line.ljust(inner_width) + " " + bubble_style(_round_v("│"))
+            sys.stdout.write(content_str + "\n")
             y += 1
 
-        # bottom border
+        # Bottom border with rounded corners
         sys.stdout.write(f"\033[{y};1H")
-        sys.stdout.write(_paint(" " * pad + _g("\u2570", "\\") + _g("\u2500", "-") * (inner + 2) + _g("\u256f", "/"), color))
-        return total + 1
+        bottom_border = _paint(" " * pad, "") + bubble_style(_corner_bl("╰") + _round_h("─") * (inner_width + 2) + _corner_br("╯"))
+        sys.stdout.write(bottom_border + "\n")
+        return bubble_h + 1
 
     def render(self):
         self._update_size()
         width = self.term_width - 2
         width = max(width, 20)
 
-        # clear screen + hide cursor
+        # Clear screen + hide cursor
         sys.stdout.write("\033[2J\033[H\033[?25l")
         sys.stdout.flush()
 
-        # header
+        # Header
         self._render_header(width)
 
-        # scroll region for messages
+        # Scroll region for messages
         top = self.msg_start_y
         bot = self.input_start_y - 1
         sys.stdout.write(f"\033[{top};{bot+1}r")
         sys.stdout.flush()
 
-        # messages
+        # Messages
         self._render_messages(width)
 
-        # reset scroll region to full terminal
+        # Reset scroll region to full terminal
         sys.stdout.write(f"\033[1;{self.term_height}r")
         sys.stdout.flush()
 
-        # input area
+        # Input area
         self._render_input_area(width)
 
-        # show cursor
+        # Show cursor
         sys.stdout.write("\033[?25h")
         sys.stdout.flush()
 
     def _render_header(self, width: int):
-        title = _bold(_cyan(_g("\u25b6", ">"))) + " RHASAN INDIE'S AGENTIC LLM  \u00b7  Terminal"
-        stats = _dim(f"{self.term_width}x{self.term_height}  \u00b7  {len(self.messages)} msgs")
+        # Modern header with status indicators
+        title = _bold(_accent("◇")) + " " + _bold("Sovereign-Agentic-AI") + " " + _dim("·") + " " + _muted("Terminal")
+        stats = _muted(f"{self.term_width}x{self.term_height}") + _dim(" · ") + _muted(f"{len(self.messages)} msgs")
         if self.scroll > 0:
-            stats += _dim(f"  \u00b7  scroll {self.scroll}")
+            stats += _dim(" · ") + _muted(f"scroll {self.scroll}")
+
         line = title + "  " + stats
-        if len(_strip_ansi(line)) > width:
-            line = line[: width - 3] + _dim("...")
+        if _strip_ansi_len(line) > width:
+            line = _strip_ansi(line)[:width - 3] + _dim("...")
+
         sys.stdout.write(f"\033[1;1H{line}\n")
-        sys.stdout.write(f"\033[2;1H{_g('\u2500', '-') * self.term_width}\n")
+        sys.stdout.write(f"\033[2;1H{_muted(_round_h('─') * self.term_width)}\n")
         sys.stdout.flush()
 
     def _render_messages(self, width: int):
         if not self.messages:
             sys.stdout.write(f"\033[{self.msg_start_y};1H")
-            sys.stdout.write(_dim("  No messages yet. Type something to start...") + "\n")
+            sys.stdout.write(_muted("  No messages yet. Type something to start...") + "\n")
             sys.stdout.flush()
             return
 
-        # Each rendered cell is 3 + wrapped-lines tall, so count by *rows*
-        # (plus the scroll offset), not by number of messages.
+        # Calculate visible messages
         available = max(1, self.msg_area_h)
         heights = []
         total_h = 0
@@ -556,9 +753,9 @@ class TUIRenderer:
             heights.append((i, h))
             total_h += h
         heights.reverse()
+
         end = len(self.messages)
         if self.scroll > 0:
-            # scroll up: drop whole cells from the bottom until the offset is met
             idx = len(heights) - 1
             offset = self.scroll
             while idx >= 0 and offset > 0:
@@ -571,11 +768,12 @@ class TUIRenderer:
 
         y = self.msg_start_y
         for i, _h in heights:
-            y += self._render_message_cell(self.messages[i], y, width)
-        # scroll indicator at bottom of message area
+            y += self._render_message_bubble(self.messages[i], y, width)
+
+        # Scroll indicator
         if len(self.messages) > len(heights):
             start = heights[0][0] + 1 if heights else len(self.messages)
-            info = _dim(f"  {start}-{end} of {len(self.messages)}")
+            info = _muted(f"  {start}-{end} of {len(self.messages)}")
             sys.stdout.write(f"\033[{self.input_start_y - 1};1H{info}")
             sys.stdout.flush()
 
@@ -586,11 +784,11 @@ class TUIRenderer:
 
     def _render_input_area(self, width: int):
         y = self.input_start_y
-        sys.stdout.write(f"\033[{y};1H{_g('\u2500', '-') * self.term_width}\n")
-        sys.stdout.write(f"\033[{y+1};1H" + _cyan(_g("\u276f", ">")) + " \n")
-        hint = _dim("Type a message  |  /help for commands  |  Mouse: scroll/select/dbl-click copy")
-        if len(_strip_ansi(hint)) > width:
-            hint = hint[: width - 3] + _dim("...")
+        sys.stdout.write(f"\033[{y};1H{_muted(_round_h('─') * self.term_width)}\n")
+        sys.stdout.write(f"\033[{y+1};1H" + _accent(_ICONS["arrow"] + " ") + "\n")
+        hint = _muted("Type a message") + _dim(" · ") + _muted("/help for commands") + _dim(" · ") + _muted("Tab to complete")
+        if _strip_ansi_len(hint) > width:
+            hint = _strip_ansi(hint)[:width - 3] + _dim("...")
         sys.stdout.write(f"\033[{y+2};1H{hint}\n")
         sys.stdout.flush()
 
@@ -600,6 +798,10 @@ class TUIRenderer:
     def scroll_down(self, amount: int = 3):
         max_scroll = max(0, len(self.messages) - self.msg_area_h)
         self.scroll = min(max_scroll, self.scroll + amount)
+
+
+def _strip_ansi_len(s: str) -> int:
+    return len(_strip_ansi(s))
 
     def select_at(self, y: int):
         if y < self.msg_start_y or y >= self.input_start_y:
@@ -1204,12 +1406,12 @@ def _show_thinking(text: str, st: dict, tui: Optional[TUIRenderer] = None):
         return
     if st["show_thinking"]:
         border = _g("\u2500", "-")
-        print(_cyan(f"  {border} thinking {border}"))
+        print(_thinking_color(f"  {border} thinking {border}"))
         print(_dim(text[:600]))
         if len(text) > 600:
             print(_dim(f"  {border} {len(text) - 600} more chars {border}"))
     else:
-        print(_dim(f"  [thinking] {len(text)} chars"))
+        print(_thinking_color(f"  [thinking] {len(text)} chars"))
 
 
 def _ask_stream(orch: Orchestrator, st: dict, kwargs: dict, tui: Optional[TUIRenderer] = None):
@@ -1226,7 +1428,7 @@ def _ask_stream(orch: Orchestrator, st: dict, kwargs: dict, tui: Optional[TUIRen
                     tui.add("assistant", "", model=model)
                     tui.render()
                 else:
-                    print(_cyan(f"  > {model}"))
+                    print(_accent(f"  ▸ {model}"))
             elif t == "thinking":
                 _show_thinking(evt.get("content") or "", st, tui)
             elif t == "response":
@@ -1264,7 +1466,7 @@ def _ask_stream(orch: Orchestrator, st: dict, kwargs: dict, tui: Optional[TUIRen
         tui.render()
     else:
         print()
-        print(_cyan(f"  [{model or st['last_model']} | {len(text.split())} tok | {tps:.1f} tps | {elapsed:.1f}s]"))
+        print(_accent(f"  [{model or st['last_model']}") + _dim(" · ") + _muted(f"{len(text.split())} tok") + _dim(" · ") + _muted(f"{tps:.1f} tps") + _dim(" · ") + _muted(f"{elapsed:.1f}s") + _accent("]"))
 
 
 def _ask_parallel(orch: Orchestrator, st: dict, kwargs: dict, tui: Optional[TUIRenderer] = None):
@@ -1286,7 +1488,7 @@ def _ask_parallel(orch: Orchestrator, st: dict, kwargs: dict, tui: Optional[TUIR
         tui.add("assistant", response, model=model, elapsed=time.time() - start, tokens=len(response.split()))
         tui.render()
     else:
-        print(_green(response))
+        print(_assistant_color(response))
     st["tokens"] += len(response.split())
     extra = f"model={model}"
     candidates = result.get("parallel_candidates")
@@ -1297,7 +1499,7 @@ def _ask_parallel(orch: Orchestrator, st: dict, kwargs: dict, tui: Optional[TUIR
         except Exception:
             pass
     if tui is None:
-        print(_dim(f"  [{extra} | {time.time() - start:.1f}s | {st['tokens']} tok]"))
+        print(_dim(f"  [{extra}") + _dim(" · ") + _muted(f"{time.time() - start:.1f}s") + _dim(" · ") + _muted(f"{st['tokens']} tok") + _dim("]"))
 
 
 def _ask(orch: Orchestrator, st: dict, system_override: Optional[str] = None, tui: Optional[TUIRenderer] = None):
@@ -1590,31 +1792,31 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
         agent = create_computer_agent(mm, orch, sandbox=sandbox,
                                       allow_gui=bool(CONFIG.computer.get("allow_gui")))
         st["_computer_agent"] = agent
-        mode_label = _yellow("SANDBOX") if sandbox else _green("FULL ACCESS")
-        print(_cyan(f"\n  Computer Agent [{mode_label}] | Goal: {goal}"))
+        mode_label = _warning_color("SANDBOX") if sandbox else _success_color("FULL ACCESS")
+        print(_accent(f"\n  Computer Agent [{mode_label}]") + _dim(" · ") + _muted(f"Goal: {goal}"))
         print(_dim("  Ctrl+C to cancel\n"))
 
         def _agent_callback(step):
-            icon = _green("OK") if step.tool_result and step.tool_result.success else _red("ERR")
+            icon = _success_color("OK") if step.tool_result and step.tool_result.success else _error_color("ERR")
             args_str = ""
             if step.tool_args:
                 args_str = str(step.tool_args)[:120]
-            print(_dim(f"  [{step.step_num}] ") + f"{step.tool_name} {args_str} [{icon}] {step.elapsed_s:.1f}s")
+            print(_dim(f"  [{step.step_num}] ") + f"{step.tool_name} {args_str} [" + icon + _dim("] ") + _muted(f"{step.elapsed_s:.1f}s"))
 
         try:
             agent_result = agent.run(goal, callback=_agent_callback)
             print()
-            print(_green("  " + "=" * 60))
-            print(_green(f"  RESULT ({len(agent_result.steps)} steps, {agent_result.total_elapsed_s:.1f}s):"))
-            print(_green("  " + "=" * 60))
+            print(_success_color("  " + "=" * 60))
+            print(_success_color(f"  RESULT ({len(agent_result.steps)} steps, {agent_result.total_elapsed_s:.1f}s):"))
+            print(_success_color("  " + "=" * 60))
             for ans_line in agent_result.final_answer.split("\n"):
                 print(f"  {ans_line}")
             print()
         except KeyboardInterrupt:
             agent.cancel()
-            print(_yellow("\n  [Cancelled]"))
+            print(_warning_color("\n  [Cancelled]"))
         except Exception as e:
-            print(_red(f"\n  [Error] {e}"))
+            print(_error_color(f"\n  [Error] {e}"))
         finally:
             st.pop("_computer_agent", None)
         return
@@ -1716,21 +1918,21 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
             return
         # Default: list tools with descriptions
         tools = ["chat"] + agents.list_agents() + agents.list_skills()
-        print(f"\n  {_bold('MCP Tools')} ({len(tools)}):")
-        print(f"  {_dim('chat')}  - Chat with the AI assistant (orchestrator pipeline)")
+        print(f"\n  {_bold(_accent('MCP Tools'))} ({len(tools)}):")
+        print(f"  {_muted('chat')}  - " + _dim("Chat with the AI assistant (orchestrator pipeline)"))
         for tool_name in agents.list_agents():
             a = agents.get_agent(tool_name)
             desc = a["description"] if a else ""
-            print(f"  {_cyan(tool_name)}  - {desc}")
+            print(f"  {_user_color(tool_name)}  - {desc}")
         for tool_name in agents.list_skills():
             s = agents.get_skill(tool_name)
             desc = s["description"] if s else ""
             params = ", ".join(p["name"] for p in s.get("params", [])) if s and s.get("params") else ""
             param_str = f" [{params}]" if params else ""
-            print(f"  {_green(tool_name)}{param_str}  - {desc}")
+            print(f"  {_success_color(tool_name)}{param_str}  - {desc}")
         print(f"\n  {_dim('Call a tool:')}  /mcp call <tool> <input text>")
         print(f"  {_dim('JSON output:')}  /mcp json")
-        print("  Each skill/agent you add becomes an MCP tool automatically.")
+        print(_dim("  Each skill/agent you add becomes an MCP tool automatically."))
         return
     if cmd == "/skills":
         for n in agents.list_skills():
@@ -1816,10 +2018,11 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
         print(f"Harness: generation={harness_stats['generation']} epsilon={harness_stats['epsilon']}")
         data = harness_stats.get("data", {})
         if data:
-            print(f"  {'Task/Model':<25} {'Score':>6} {'Attempts':>8} {'Errors':>6} {'Avg Lat':>8} {'Tokens':>7}")
-            print(f"  {'-'*25} {'-'*6} {'-'*8} {'-'*6} {'-'*8} {'-'*7}")
+            print(f"  {_muted('Task/Model'):<25} {_accent('Score'):>6} {_muted('Attempts'):>8} {_muted('Errors'):>6} {_muted('Avg Lat'):>8} {_muted('Tokens'):>7}")
+            print(f"  {_muted('-'*25)} {_muted('-'*6)} {_muted('-'*8)} {_muted('-'*6)} {_muted('-'*8)} {_muted('-'*7)}")
             for k, v in sorted(data.items(), key=lambda x: -x[1]["score"]):
-                print(f"  {k:<25} {v['score']:>6.1f} {v['attempts']:>8} {v['errors']:>6} "
+                score_val = v['score']
+                print(f"  {k:<25} {_success_color(f'{score_val:>6.1f}')} {v['attempts']:>8} {v['errors']:>6} "
                       f"{v['avg_latency']:>7.2f}s {v['tokens']:>7}")
         else:
             print(f"  {_dim('No model feedback yet. Use the system to generate responses.')}")
@@ -2051,11 +2254,11 @@ def _handle_command(line: str, orch: Orchestrator, mm: ModelManager, mem: Memory
 
     from difflib import get_close_matches
     suggestions = get_close_matches(cmd, _COMMANDS, n=3, cutoff=0.6)
-    print(f"Unknown: {cmd}")
+    print(_error_color(f"Unknown: {cmd}"))
     if suggestions:
-        print(f"  Did you mean: {_cyan(', '.join(suggestions))}?")
+        print(f"  Did you mean: {_accent(', '.join(suggestions))}?")
     else:
-        print(f"  Type {_cyan('/help')} for the full command list.")
+        print(f"  Type {_accent('/help')} for the full command list.")
     return
 
 
@@ -2110,13 +2313,13 @@ def main(model_manager=None):
             tui.render()
             line = _read_prompt(_prompt(), tui)
         except KeyboardInterrupt:
-            print("\n\n\ud83d\udc4b Goodbye!")
+            print(_muted("\n👋 Goodbye!"))
             break
         except EOFError:
-            print("\n\n\ud83d\udc4b Goodbye!")
+            print(_muted("\n👋 Goodbye!"))
             break
         if line is None:
-            print("Goodbye!")
+            print(_muted("\n👋 Goodbye!"))
             break
 
         if not line.strip():
@@ -2158,10 +2361,10 @@ def main(model_manager=None):
             agent_prompt = agents.agent_system_prompt(st["agent"])
             _ask(orch, st, system_override=agent_prompt, tui=tui)
         except KeyboardInterrupt:
-            print(_yellow("\n[Stopped]"))
+            print(_warning_color("\n[Stopped]"))
             continue
         except Exception as e:
-            print(_red(f"[Error] {e}"))
+            print(_error_color(f"[Error] {e}"))
             continue
 
     mm.unload_all()
